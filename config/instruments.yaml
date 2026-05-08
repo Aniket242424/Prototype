@@ -1,0 +1,48 @@
+# Index instrument metadata. Upstox instrument keys are stable identifiers;
+# verify against current Upstox instrument master (downloadable CSV) on first
+# deployment — the values below are typical but should be confirmed by
+# `scripts/verify_upstox_capabilities.py`.
+#
+# expiry_weekday: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri
+# (NSE indices currently expire Thursday; SENSEX/BANKEX on Friday — verify with broker)
+
+instruments:
+  - name: NIFTY
+    upstox_instrument_key: "NSE_INDEX|Nifty 50"
+    exchange: NSE_INDEX
+    lot_size: 25
+    tick_size: 0.05
+    expiry_weekday: 3
+    enabled: true
+
+  - name: BANKNIFTY
+    upstox_instrument_key: "NSE_INDEX|Nifty Bank"
+    exchange: NSE_INDEX
+    lot_size: 15
+    tick_size: 0.05
+    expiry_weekday: 2
+    enabled: true
+
+  - name: FINNIFTY
+    upstox_instrument_key: "NSE_INDEX|Nifty Fin Service"
+    exchange: NSE_INDEX
+    lot_size: 25
+    tick_size: 0.05
+    expiry_weekday: 1
+    enabled: true
+
+  - name: SENSEX
+    upstox_instrument_key: "BSE_INDEX|SENSEX"
+    exchange: BSE_INDEX
+    lot_size: 10
+    tick_size: 0.05
+    expiry_weekday: 4
+    enabled: true
+
+  - name: BANKEX
+    upstox_instrument_key: "BSE_INDEX|BANKEX"
+    exchange: BSE_INDEX
+    lot_size: 15
+    tick_size: 0.05
+    expiry_weekday: 0
+    enabled: true

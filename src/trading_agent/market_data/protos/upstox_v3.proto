@@ -1,0 +1,118 @@
+// Upstox V3 Market Data Feed — protobuf schema.
+// Source: https://upstox.com/developer/api-documentation/web-socket/market-data-feeder
+// Last verified: 2026-05-09 against the user's account (WS authorize returned valid v3 URI).
+//
+// Compile to Python via:
+//   py -3.14 scripts/compile_protos.py
+// or directly:
+//   py -3.14 -m grpc_tools.protoc -I src/trading_agent/market_data/protos
+//     --python_out=src/trading_agent/market_data/protos
+//     src/trading_agent/market_data/protos/upstox_v3.proto
+
+syntax = "proto3";
+
+package com.upstox.marketdatafeederv3udapi.rpc.proto;
+
+message LTPC {
+    double ltp = 1;
+    int64 ltt = 2;
+    int64 ltq = 3;
+    double cp = 4;
+}
+
+message MarketLevel {
+    repeated Quote bidAskQuote = 1;
+}
+
+message OptionGreeks {
+    double delta = 1;
+    double theta = 2;
+    double gamma = 3;
+    double vega = 4;
+    double rho = 5;
+}
+
+message MarketOHLC {
+    repeated OHLC ohlc = 1;
+}
+
+message Quote {
+    int32 bidQ = 1;
+    double bidP = 2;
+    int32 askQ = 3;
+    double askP = 4;
+}
+
+message OHLC {
+    string interval = 1;
+    double open = 2;
+    double high = 3;
+    double low = 4;
+    double close = 5;
+    int64 vol = 6;
+    int64 ts = 7;
+}
+
+message Feed {
+    oneof FeedUnion {
+        LTPC ltpc = 1;
+        FullFeed fullFeed = 2;
+        FirstLevelWithGreeks firstLevelWithGreeks = 3;
+    }
+    enum RequestMode {
+        UNKNOWN = 0;
+        LTPC = 1;
+        FULL = 2;
+        FIRST_LEVEL_WITH_GREEKS = 3;
+    }
+    RequestMode requestMode = 4;
+}
+
+message FirstLevelWithGreeks {
+    LTPC ltpc = 1;
+    FirstLevelQuote firstLevelQuote = 2;
+    OptionGreeks optionGreeks = 3;
+}
+
+message FirstLevelQuote {
+    int64 bidQ = 1;
+    double bidP = 2;
+    int64 askQ = 3;
+    double askP = 4;
+}
+
+message MarketFullFeed {
+    LTPC ltpc = 1;
+    MarketLevel marketLevel = 2;
+    OptionGreeks optionGreeks = 3;
+    MarketOHLC marketOHLC = 4;
+    double atp = 5;
+    int64 vtt = 6;
+    double oi = 7;
+    double iv = 8;
+    double tbq = 9;
+    double tsq = 10;
+}
+
+message IndexFullFeed {
+    LTPC ltpc = 1;
+    MarketOHLC marketOHLC = 2;
+}
+
+message FullFeed {
+    oneof FullFeedUnion {
+        MarketFullFeed marketFF = 1;
+        IndexFullFeed indexFF = 2;
+    }
+}
+
+message FeedResponse {
+    Type type = 1;
+    map<string, Feed> feeds = 2;
+    int64 currentTs = 3;
+    enum Type {
+        initial_feed = 0;
+        live_feed = 1;
+        market_info = 2;
+    }
+}

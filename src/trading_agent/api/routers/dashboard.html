@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Trading_Agent — Dashboard</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1f2630;
+    --border: #2a313c;
+    --text: #d0d6df;
+    --muted: #8b949e;
+    --accent: #4493f8;
+    --green: #3fb950;
+    --red: #f85149;
+    --amber: #d29922;
+    --grey: #6e7681;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  main {
+    padding: 16px 24px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 16px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .panel.full { grid-column: 1 / -1; }
+  .panel h2 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    border-bottom: 1px dashed transparent;
+  }
+  .row + .row { border-top: 1px dashed var(--border); }
+  .label { color: var(--muted); }
+  .value { color: var(--text); font-weight: 500; }
+  .value.num { font-variant-numeric: tabular-nums; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .b-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.4); }
+  .b-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.4); }
+  .b-amber { background: rgba(210,153,34,0.15); color: var(--amber); border: 1px solid rgba(210,153,34,0.4); }
+  .b-grey { background: rgba(110,118,129,0.15); color: var(--grey); border: 1px solid rgba(110,118,129,0.4); }
+  .b-blue { background: rgba(68,147,248,0.15); color: var(--accent); border: 1px solid rgba(68,147,248,0.4); }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td.num, th.num { text-align: right; }
+  .small { font-size: 11px; color: var(--muted); }
+  .footer { color: var(--muted); padding: 12px 24px; font-size: 11px; border-top: 1px solid var(--border); }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+  .pulse.green { background: var(--green); box-shadow: 0 0 0 0 rgba(63,185,80,0.6); animation: pulse 2s infinite; }
+  .pulse.red { background: var(--red); }
+  .pulse.grey { background: var(--grey); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(63,185,80,0.6); }
+    70% { box-shadow: 0 0 0 8px rgba(63,185,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+  }
+  .phase-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
+  .phase {
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    font-size: 11px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .err { color: var(--red); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Trading_Agent <span class="meta" id="env-tag"></span></h1>
+  <div class="meta">
+    <span id="ist-now">--</span>
+    &nbsp;|&nbsp; market <span id="market-status">--</span>
+    &nbsp;|&nbsp; capital <span id="capital">--</span>
+    &nbsp;|&nbsp; <span id="last-update">--</span>
+  </div>
+</header>
+
+<main id="main">
+  <div class="panel">
+    <h2>Infrastructure</h2>
+    <div id="infra-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Authentication</h2>
+    <div id="auth-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Live-trading 3-lock gate</h2>
+    <div id="lock-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Kill switch</h2>
+    <div id="ks-rows"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Market data — per instrument</h2>
+    <table id="instruments-table">
+      <thead>
+        <tr>
+          <th>Index</th>
+          <th>Exchange</th>
+          <th class="num">Lot</th>
+          <th class="num">Last LTP</th>
+          <th>Last tick</th>
+          <th>State</th>
+          <th class="num">Ticks today</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+      <tfoot>
+        <tr>
+          <td colspan="6" style="color:var(--muted)">Total ticks today (all instruments)</td>
+          <td class="num" id="total-ticks">0</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>India VIX</h2>
+    <div id="vix-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Options chain — snapshots today</h2>
+    <div id="chain-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Trading state</h2>
+    <div id="trading-rows"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Regime & Opportunity (Phase 2)</h2>
+    <div id="phase2-status" class="small" style="margin-bottom:8px;color:var(--muted)"></div>
+    <table id="phase2-table">
+      <thead>
+        <tr>
+          <th>Underlying</th>
+          <th>Regime</th>
+          <th class="num">Conf</th>
+          <th class="num">ADX</th>
+          <th class="num">RV5/60</th>
+          <th class="num">PCR (OI)</th>
+          <th class="num">IV %ile</th>
+          <th class="num">ATM CE/PE spread bps</th>
+          <th class="num">Score</th>
+          <th>Active</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel full">
+    <h2>Active Opportunity</h2>
+    <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
+  </div>
+
+  <div class="panel full">
+    <h2>Phase progress</h2>
+    <div class="phase-list" id="phase-list"></div>
+  </div>
+</main>
+
+<div class="footer" id="footer">Auto-refresh every 2s.</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function fmtNum(n, dp=2) {
+  if (n === null || n === undefined) return "—";
+  return Number(n).toLocaleString("en-IN", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+}
+function fmtInt(n) {
+  if (n === null || n === undefined) return "—";
+  return Number(n).toLocaleString("en-IN");
+}
+function fmtTime(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("en-IN", { hour12: false });
+  } catch { return "—"; }
+}
+function fmtAge(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+    if (sec < 60) return sec + "s ago";
+    if (sec < 3600) return Math.floor(sec/60) + "m ago";
+    return Math.floor(sec/3600) + "h ago";
+  } catch { return "—"; }
+}
+function fmtCountdown(sec) {
+  if (sec === null || sec === undefined) return "—";
+  if (sec <= 0) return "expired";
+  const h = Math.floor(sec/3600);
+  const m = Math.floor((sec%3600)/60);
+  return h + "h " + m + "m";
+}
+function badge(cls, text) { return `<span class="badge ${cls}">${text}</span>`; }
+function row(label, valueHtml) {
+  return `<div class="row"><span class="label">${label}</span><span class="value">${valueHtml}</span></div>`;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/dashboard/api/status");
+    if (!r.ok) throw new Error("status " + r.status);
+    const d = await r.json();
+    render(d);
+    $("last-update").textContent = "updated " + fmtTime(new Date().toISOString());
+    $("last-update").style.color = "var(--green)";
+  } catch (e) {
+    $("last-update").textContent = "ERROR: " + e.message;
+    $("last-update").style.color = "var(--red)";
+  }
+}
+
+function render(d) {
+  $("env-tag").textContent = "[" + (d.system.app_env || "?") + "]";
+  $("ist-now").textContent = fmtTime(d.system.ist_now);
+  $("market-status").innerHTML = d.system.market_open
+    ? badge("b-green", "OPEN")
+    : badge("b-grey", "CLOSED");
+  $("capital").textContent = "₹" + fmtInt(d.system.trading_capital_inr);
+
+  // Infra
+  const i = d.infra;
+  const pg = i.postgres === "healthy" ? badge("b-green", "healthy") : badge("b-red", i.postgres);
+  const rd = i.redis === "healthy" ? badge("b-green", "healthy") : badge("b-red", i.redis);
+  const wk = i.market_data_worker === "running" ? badge("b-green", "running") : badge("b-grey", "stopped");
+  $("infra-rows").innerHTML =
+    row("Postgres", pg) +
+    row("Redis", rd) +
+    row("Market Data Worker", wk) +
+    row("Last worker heartbeat", `<span class="value num">${fmtAge(i.market_data_worker_last_heartbeat)}</span>`);
+
+  // Auth
+  const a = d.auth;
+  if (a.present) {
+    const v = a.valid ? badge("b-green", "VALID") : badge("b-red", "EXPIRED");
+    $("auth-rows").innerHTML =
+      row("Token", v) +
+      row("User ID", `<span class="value">${a.user_id}</span>`) +
+      row("Issued at", `<span class="value">${fmtTime(a.issued_at)}</span>`) +
+      row("Time to next 03:30 IST", `<span class="value num">${fmtCountdown(a.seconds_to_expiry)}</span>`);
+  } else {
+    $("auth-rows").innerHTML = row("Token", badge("b-red", "NOT FOUND")) +
+      `<div class="small">Run: <code>py -3.14 scripts/upstox_auth_cli.py</code></div>`;
+  }
+
+  // Locks
+  const lk = d.live_trading;
+  const overall = lk.authorized ? badge("b-amber", "LIVE AUTHORIZED") : badge("b-blue", "PAPER / GATED");
+  $("lock-rows").innerHTML =
+    row("Authorization", overall) +
+    row("LIVE_TRADING env",
+        lk.locks.env_LIVE_TRADING ? badge("b-green", "TRUE") : badge("b-grey", "false")) +
+    row("ACKNOWLEDGMENT.md present",
+        lk.locks.file_present ? badge("b-green", "TRUE") : badge("b-red", "MISSING")) +
+    row("DB SHA matches",
+        lk.locks.db_sha_matches ? badge("b-green", "TRUE") : badge("b-grey", "false"));
+
+  // Kill switch
+  const ks = d.kill_switch;
+  if (ks.tripped === null) {
+    $("ks-rows").innerHTML = row("Status", badge("b-grey", "UNKNOWN (Redis down)"));
+  } else if (ks.tripped) {
+    $("ks-rows").innerHTML =
+      row("Status", badge("b-red", "TRIPPED")) +
+      row("Reason", `<span class="value">${ks.reason || "—"}</span>`) +
+      row("Tripped at", `<span class="value">${fmtTime(ks.tripped_at)}</span>`);
+  } else {
+    $("ks-rows").innerHTML = row("Status", badge("b-green", "ARMED (not tripped)"));
+  }
+
+  // Instruments
+  const tbody = document.querySelector("#instruments-table tbody");
+  tbody.innerHTML = d.market_data.instruments.map(inst => {
+    const stateBadge = !inst.last_tick_at
+      ? badge("b-grey", "NO DATA")
+      : inst.is_stale
+        ? badge("b-amber", "STALE")
+        : badge("b-green", "FRESH");
+    return `<tr>
+      <td>${inst.name}</td>
+      <td class="small">${inst.exchange}</td>
+      <td class="num">${inst.lot_size}</td>
+      <td class="num">${fmtNum(inst.last_ltp)}</td>
+      <td class="small">${fmtAge(inst.last_tick_at)}</td>
+      <td>${stateBadge}</td>
+      <td class="num">${fmtInt(inst.ticks_today)}</td>
+    </tr>`;
+  }).join("");
+  $("total-ticks").textContent = fmtInt(d.market_data.total_ticks_today);
+
+  // VIX
+  const v = d.market_data.india_vix || {};
+  const vBadge = v.latest === null
+    ? badge("b-grey", "NO DATA")
+    : v.latest < 14
+      ? badge("b-green", v.latest.toFixed(2) + " (calm)")
+      : v.latest < 22
+        ? badge("b-amber", v.latest.toFixed(2) + " (elevated)")
+        : badge("b-red", v.latest.toFixed(2) + " (panicked)");
+  $("vix-rows").innerHTML =
+    row("Latest VIX", vBadge) +
+    row("Last update", `<span class="value">${fmtAge(v.latest_at)}</span>`) +
+    row("Rows today", `<span class="value num">${fmtInt(v.rows_today)}</span>`);
+
+  // Chain snapshots
+  const c = d.market_data.chain_snapshots || {};
+  const counts = c.snapshots_today_by_underlying || {};
+  const ages = c.latest_snapshot_at_by_underlying || {};
+  let chainHtml = row("Total snapshots today", `<span class="value num">${fmtInt(c.total_snapshots_today || 0)}</span>`);
+  for (const u of ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX"]) {
+    chainHtml += row(u, `<span class="value">${fmtInt(counts[u] || 0)} <span class="small">(${fmtAge(ages[u])})</span></span>`);
+  }
+  $("chain-rows").innerHTML = chainHtml;
+
+  // Trading
+  const t = d.trading;
+  const pnlBadge = t.realized_pnl_today_inr > 0
+    ? badge("b-green", "+₹" + fmtNum(t.realized_pnl_today_inr, 0))
+    : t.realized_pnl_today_inr < 0
+      ? badge("b-red", "₹" + fmtNum(t.realized_pnl_today_inr, 0))
+      : badge("b-grey", "₹0");
+  $("trading-rows").innerHTML =
+    row("Open positions", `<span class="value num">${t.open_positions}</span>`) +
+    row("Trades today", `<span class="value num">${t.trades_today}</span>`) +
+    row("Realized PnL today", pnlBadge) +
+    row("Risk approvals today", `<span class="value num">${t.risk_approvals_today}</span>`) +
+    row("Risk rejections today", `<span class="value num">${t.risk_rejections_today}</span>`);
+
+  // ---------- Phase 2 panels ----------
+  const regimes = d.regime || {};
+  const intels = d.intel || {};
+  const opp = d.opportunity || { active: null, ranking: [] };
+  const rankingMap = {};
+  (opp.ranking || []).forEach(r => { rankingMap[r.underlying] = r.score; });
+  const activeUnderlying = opp.active ? opp.active.underlying : null;
+
+  $("phase2-status").textContent = d.regime_worker_alive
+    ? "regime worker: running"
+    : "regime worker: stopped — start with `py -3.14 -u -m trading_agent.regime.worker`";
+
+  function regimeBadge(r) {
+    if (!r || !r.regime) return badge("b-grey", "—");
+    const cls = ({
+      TREND_UP: "b-green", TREND_DOWN: "b-red",
+      VOL_EXPANSION: "b-amber", VOL_COMPRESSION: "b-grey",
+      EVENT_DRIVEN: "b-red", RANGE: "b-blue",
+      CHOPPY: "b-grey",
+    })[r.regime] || "b-grey";
+    return badge(cls, r.regime);
+  }
+  const phase2Body = ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "BANKEX"].map(u => {
+    const r = regimes[u];
+    const i = intels[u];
+    const score = rankingMap[u];
+    const adx = r && r.components ? r.components.adx14 : null;
+    const rvr = r && r.components ? r.components.rv_ratio : null;
+    const pcr = i ? i.pcr_oi : null;
+    const ivp = i ? i.iv_percentile_30d : null;
+    const ce = i ? i.atm_call_spread_bps : null;
+    const pe = i ? i.atm_put_spread_bps : null;
+    const isActive = (activeUnderlying === u);
+    return `<tr>
+      <td>${u}</td>
+      <td>${regimeBadge(r)}</td>
+      <td class="num">${r ? fmtNum(r.confidence, 2) : "—"}</td>
+      <td class="num">${adx !== null && adx !== undefined ? fmtNum(adx, 1) : "—"}</td>
+      <td class="num">${rvr !== null && rvr !== undefined ? fmtNum(rvr, 2) : "—"}</td>
+      <td class="num">${pcr !== null && pcr !== undefined ? fmtNum(pcr, 2) : "—"}</td>
+      <td class="num">${ivp !== null && ivp !== undefined ? fmtNum(ivp * 100, 0) + "%" : "—"}</td>
+      <td class="num">${ce !== null && ce !== undefined ? fmtNum(ce, 0) : "—"} / ${pe !== null && pe !== undefined ? fmtNum(pe, 0) : "—"}</td>
+      <td class="num">${score !== undefined ? fmtNum(score, 3) : "—"}</td>
+      <td>${isActive ? badge("b-green", "ACTIVE") : ""}</td>
+    </tr>`;
+  }).join("");
+  document.querySelector("#phase2-table tbody").innerHTML = phase2Body;
+
+  if (opp.active) {
+    const a = opp.active;
+    const dirBadge = a.direction === "LONG"
+      ? badge("b-green", a.direction)
+      : badge("b-red", a.direction);
+    const c = a.components || {};
+    const dimRows = [
+      ["Momentum quality",     c.momentum_quality],
+      ["Vol expansion prob",   c.vol_expansion_prob],
+      ["Liquidity quality",    c.liquidity_quality],
+      ["Spread tightness",     c.spread_tightness],
+      ["Slippage risk (1=best)", c.slippage_risk],
+      ["IV conditions",        c.iv_conditions],
+      ["Regime favorability",  c.regime_favorability],
+      ["Trend quality",        c.trend_quality],
+      ["Risk-reward profile",  c.risk_reward_profile],
+    ];
+    $("active-opportunity").innerHTML = `
+      <div style="margin-bottom:8px;font-size:14px">
+        <strong>${a.underlying}</strong> ${dirBadge}
+        &nbsp;score ${badge("b-blue", fmtNum(a.score, 3))}
+        &nbsp;<span class="small">expiry ${a.recommended_expiry}, strike band ${a.recommended_strike_band.low}–${a.recommended_strike_band.high}</span>
+      </div>
+      <table style="max-width:480px">
+        ${dimRows.map(([k, v]) => `<tr><td>${k}</td><td class="num">${fmtNum(v, 3)}</td></tr>`).join("")}
+      </table>`;
+    $("active-opportunity").style.color = "var(--text)";
+  } else {
+    $("active-opportunity").innerHTML = "No active opportunity above threshold (0.65). Best ranking score: " +
+      ((opp.ranking && opp.ranking.length)
+         ? `${opp.ranking[0].underlying} ${fmtNum(opp.ranking[0].score, 3)}`
+         : "—");
+    $("active-opportunity").style.color = "var(--muted)";
+  }
+
+  // Phases
+  const phaseHtml = Object.entries(d.phases).map(([k, v]) => {
+    const lbl = k.replace(/_/g, " ").replace("phase ", "Phase ");
+    const bcls = v === "completed" ? "b-green" : v === "in_progress" ? "b-amber" : "b-grey";
+    return `<div class="phase"><span>${lbl}</span>${badge(bcls, v)}</div>`;
+  }).join("");
+  $("phase-list").innerHTML = phaseHtml;
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

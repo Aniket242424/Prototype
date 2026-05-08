@@ -1,0 +1,8 @@
+# Strategy enable/disable flags. Per-strategy thresholds (RSI bounds, ATR
+# multipliers, etc.) will be added as Phase 4 implements each strategy.
+
+momentum_breakout_enabled: true
+trend_continuation_enabled: true
+volatility_expansion_enabled: true
+gap_continuation_enabled: true
+event_driven_enabled: false           # Phase 4+ — needs an event calendar feed

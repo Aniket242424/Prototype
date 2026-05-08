@@ -1,0 +1,95 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading_agent"
+version = "0.1.0"
+description = "Autonomous institutional-grade options-buying platform for Indian index derivatives"
+requires-python = ">=3.11"
+readme = "README.md"
+authors = [{ name = "Aniket" }]
+
+dependencies = [
+    # Core async stack
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "httpx>=0.27",
+    "websockets>=12.0",
+    "tenacity>=8.2",                  # retry with backoff
+
+    # Persistence
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",                  # async runtime driver
+    "psycopg[binary]>=3.1",           # sync driver for Alembic
+    "alembic>=1.13",
+    "redis>=5.0",
+
+    # Quant / data
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.12",                    # Greeks / Black-Scholes
+    "vectorbt>=0.26",                 # Phase 5 backtesting
+
+    # ML (Phase 6)
+    "xgboost>=2.0",
+
+    # AI advisor
+    "anthropic>=0.34",
+
+    # Upstox SDK is optional; we'll use httpx + websockets directly for control
+    # "upstox-python-sdk>=1.13",
+
+    # Misc
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "structlog>=24.1",
+    "cryptography>=42.0",             # token encryption
+    "orjson>=3.9",
+    "click>=8.1",                     # CLI scripts
+    "protobuf>=4.25",                 # Upstox v2 WS uses protobuf
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "ruff>=0.3",
+    "mypy>=1.9",
+    "black>=24.3",
+    "ipython>=8.22",
+    "rich>=13.7",
+]
+
+[project.scripts]
+ta-auth = "trading_agent.auth.cli:main"
+ta-acknowledge = "scripts.acknowledge_live_trading:main"
+ta-probe = "scripts.verify_upstox_capabilities:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --strict-markers"

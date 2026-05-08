@@ -1,0 +1,67 @@
+# Conservative caps for "live from day one" deployment.
+# All percentages are FRACTIONS of TRADING_CAPITAL_INR (set in .env).
+# Tighten before increasing capital. Loosen only after sustained out-of-sample
+# performance + paper validation.
+
+# --- Loss caps (calibrated for ₹3,00,000 capital) ---
+daily_max_loss_pct: 0.02              # 2% = ₹6,000 hard kill
+rolling_drawdown_pct: 0.05            # 5% = ₹15,000 over rolling 5d window
+rolling_drawdown_window_days: 5
+
+# --- Per-trade ---
+per_trade_max_risk_pct: 0.005         # 0.5% = ₹1,500 max outlay
+max_concurrent_positions: 1           # one position at a time, period
+max_trades_per_day: 3
+consecutive_loss_lockout: 2           # 2 consecutive losses → trading disabled rest of day
+
+# --- Slippage kill switch ---
+slippage_kill_threshold_bps: 30.0     # realized > estimated by this much
+slippage_kill_consecutive: 3          # X consecutive trades trips kill
+
+# --- Liquidity / spread filters ---
+max_spread_bps: 50.0                  # reject if live spread > 50bps of mid
+min_liquidity_score: 0.55             # opportunity-engine liquidity score floor
+min_top5_depth_lots: 5                # combined top-5-level depth, in lots
+min_strike_oi: 50000                  # minimum open interest on chosen strike
+
+# --- Anti-FOMO filters (Phase 2-3) ---
+max_atr_consumed_at_entry: 0.6        # if move already used >60% of ATR, reject
+max_vwap_deviation_sigma: 1.5         # reject if price > 1.5σ from intraday VWAP
+max_consecutive_signal_candles: 4     # leg too mature → reject
+opportunity_ttl_seconds: 90           # dead signal if not filled in this window
+cooldown_after_fast_mover_sec: 180    # 1-min candle > 1.2×ATR triggers cooldown
+fast_mover_atr_multiple: 1.2
+no_reentry_same_direction_after_stop: true  # one stop-out kills that index/direction for the day
+
+# --- Volatility kill ---
+india_vix_ceiling: 30.0               # halt new entries if VIX > 30
+intraday_move_ceiling_pct: 0.025      # halt if underlying moved >2.5% intraday already
+
+# --- Data freshness ---
+stale_tick_max_age_sec: 5.0           # reject entries if last tick older than this
+broker_health_max_age_sec: 30.0       # reject entries if last successful Upstox call older
+
+# --- Time windows (IST) ---
+entry_window_start: "09:20"           # avoid first 5min noise
+entry_window_end: "14:30"             # last 1hr is too late for new entries
+forced_exit_time: "15:15"             # all positions flat by this time
+
+# --- Execution (Phase 3) — slippage discipline ---
+max_estimated_slippage_bps: 20.0      # abort placement if pre-flight estimate exceeds this
+fill_timeout_ms: 2000                 # wait this long at first limit price
+fill_improve_max_ticks: 3             # max times we walk the limit toward the touch
+fill_improve_step_ticks: 1            # tick increment per improve
+allow_market_orders_for_entries: false  # NEVER true. Market orders reserved for emergency exits.
+require_pullback_for_trend_entries: true  # don't buy the breakout candle; wait for pullback
+
+# --- Trailing stop / profit-taking (Phase 4 Position Manager) ---
+# All distances are on the UNDERLYING; translated to option premium via delta.
+initial_stop_atr_multiple: 1.5        # initial stop = 1.5 × ATR(14) on underlying
+breakeven_trigger_r_multiple: 1.0     # at +1R, move stop to entry (free trade)
+trail_method: "atr_chandelier"        # atr_chandelier | structure_swing | ema_trail
+trail_atr_period: 14
+trail_atr_multiple: 2.0               # chandelier trail = highest_high - 2.0 × ATR(14)
+trail_only_in_profit: true            # only start trailing once unrealized > 0
+partial_profit_r_multiple: 1.5        # at +1.5R, exit a portion
+partial_profit_exit_fraction: 0.5     # exit 50% of the position; let the rest run
+runner_giveback_atr_multiple: 1.0     # runner exits if it gives back 1×ATR from peak
