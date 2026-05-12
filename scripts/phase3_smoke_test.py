@@ -29,6 +29,8 @@ from trading_agent.core.constants import Direction, OptionType, OrderSide
 from trading_agent.core.kill_switch import KillSwitch
 from trading_agent.core.logging import configure_logging, get_logger
 from trading_agent.core.time_utils import is_market_open, now_ist
+import trading_agent.core.time_utils as _time_utils_module
+import trading_agent.risk.engine as _risk_engine_module
 from trading_agent.execution.broker import PaperBroker
 from trading_agent.execution.engine import ExecutionEngine
 from trading_agent.infrastructure.db import SessionLocal
@@ -88,19 +90,36 @@ async def _run(
     inject_staleness: bool,
     trip_kill_switch: bool,
     skip_execution: bool,
+    bypass_time_checks: bool,
 ) -> int:
     configure_logging()
     settings = get_settings()
     instruments = get_instruments_config()
 
+    # Time-check bypass — TEST USE ONLY. Monkeypatches the Risk Engine's
+    # time-of-day checks for the lifetime of this process. The Risk Engine
+    # imports these as bound references at import time, so we patch BOTH the
+    # source module and the risk engine module to be safe.
+    if bypass_time_checks:
+        _risk_engine_module.is_market_open = lambda *a, **kw: True
+        _risk_engine_module.in_window = lambda *a, **kw: True
+        _time_utils_module.is_market_open = lambda *a, **kw: True
+        _time_utils_module.in_window = lambda *a, **kw: True
+
     redis = make_redis()
     try:
         await _print_section("Environment")
         click.echo(f"  IST now:           {now_ist().isoformat()}")
-        click.echo(f"  Market open:       {is_market_open()}")
+        market_open_display = "True (bypassed)" if bypass_time_checks else str(is_market_open())
+        click.echo(f"  Market open:       {market_open_display}")
         click.echo(f"  App env:           {settings.app_env}")
         click.echo(f"  Capital:           Rs.{settings.trading_capital_inr:,.0f}")
         click.echo(f"  LIVE_TRADING env:  {settings.live_trading}")
+        if bypass_time_checks:
+            click.echo(click.style(
+                "  WARNING:           Time-checks bypassed (TEST MODE).",
+                fg="yellow", bold=True,
+            ))
 
         # Live-trading 3-lock status
         await _print_section("Live-trading 3-lock check")
@@ -211,6 +230,11 @@ def _strict_mode() -> bool:
 @click.option("--inject-staleness", is_flag=True, help="Mock a fresh tick TS to bypass staleness gate")
 @click.option("--trip-kill-switch", is_flag=True, help="Trip the kill switch before evaluation (demos KILL_SWITCH rejection)")
 @click.option("--skip-execution", is_flag=True, help="Run only Risk Engine, skip Execution Engine even if approved")
+@click.option(
+    "--bypass-time-checks", is_flag=True,
+    help="TEST MODE: monkeypatch market-hours + entry-window checks to pass. "
+         "Lets you see the full approval + paper fill flow off-hours.",
+)
 def main(
     underlying: str,
     premium: float,
@@ -219,6 +243,7 @@ def main(
     inject_staleness: bool,
     trip_kill_switch: bool,
     skip_execution: bool,
+    bypass_time_checks: bool,
 ) -> None:
     """Phase 3 smoke test — synthetic trade through Risk + Execution."""
     rc = asyncio.run(_run(
@@ -229,6 +254,7 @@ def main(
         inject_staleness=inject_staleness,
         trip_kill_switch=trip_kill_switch,
         skip_execution=skip_execution,
+        bypass_time_checks=bypass_time_checks,
     ))
     raise SystemExit(rc)
 

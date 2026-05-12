@@ -71,6 +71,21 @@ Expected: `decision: True`, `code: OK_PAPER`, sized lots > 0, an
 ExecutionResult with `status: FILLED` and a paper fill at the synthetic
 price.
 
+**Off-hours full approval + paper fill (TEST MODE — bypasses time checks):**
+```powershell
+py -3.14 scripts/phase3_smoke_test.py --bypass-time-checks --inject-staleness --underlying SENSEX --premium 80
+```
+Use this for testing/CI when market is closed. The two flags:
+- `--bypass-time-checks`: monkeypatches the market-hours + entry-window
+  checks for this process only. Clearly marked as TEST MODE in output.
+- `--inject-staleness`: writes a fresh tick timestamp into Redis so the
+  staleness check passes.
+
+Expected with both flags: full Risk Engine approval (`OK_PAPER`) →
+Execution Engine places LIMIT → walks 1 tick on timeout → paper fill at
+~₹80.05 → ~6 bps realized slippage logged. This proves the entire
+Phase 3 pipeline works without needing live ticks.
+
 **Demo specific rejections:**
 
 | Scenario | Command | Expected code |
@@ -230,7 +245,8 @@ branch is promoted to production-ready:
 - [ ] `py -3.14 -m pytest tests/unit/` → 105 passed
 - [ ] `py -3.14 scripts/phase3_smoke_test.py --skip-execution` → produces a rejection or approval with full snapshot
 - [ ] `py -3.14 scripts/phase3_smoke_test.py --trip-kill-switch` → rejected with code `KILL_SWITCH`
-- [ ] During market hours: full approval + paper fill flow on SENSEX
+- [ ] `py -3.14 scripts/phase3_smoke_test.py --bypass-time-checks --inject-staleness` → full FILLED flow, slippage ≈ 6 bps (off-hours full E2E)
+- [ ] During market hours: full approval + paper fill flow on SENSEX (without bypass flags)
 - [ ] During market hours: `--underlying NIFTY --premium 200` rejects with `PER_TRADE_RISK`
 - [ ] Dashboard `/control/live-trading-status` returns `authorized: false`
 - [ ] `risk_decisions` table has rows for every smoke test run

@@ -319,15 +319,22 @@ class ExecutionEngine:
         self, instrument_key: str, fallback_price: Decimal
     ) -> MarketContext:
         """
-        Build current MarketContext from Redis-cached chain data.
+        Build current MarketContext.
 
-        Phase 3.2 uses a simplified version: read last_tick LTP from Redis as
-        a proxy for mid. Phase 4 will read full top-of-book from chain snapshot.
+        Phase 3.2 uses a SYNTHETIC 1-tick-wide spread (₹0.05 above and below
+        the reference premium) when reading from chain data isn't wired in
+        yet. This is realistic enough for paper trading and keeps slippage
+        estimates well under the 20bps cap.
+
+        Phase 4 will read actual top-of-book from `options_chain_snapshots`
+        and use real bid/ask/depth.
         """
-        # Use fallback price ± 0.5% as synthetic bid/ask when we don't have depth
-        # (paper trading is forgiving; live broker would need actual depth)
-        bid = (fallback_price * Decimal("0.995")).quantize(Decimal("0.05"))
-        ask = (fallback_price * Decimal("1.005")).quantize(Decimal("0.05"))
+        tick = Decimal("0.05")
+        bid = (fallback_price - tick).quantize(tick)
+        ask = (fallback_price + tick).quantize(tick)
+        # Defensive: avoid bid <= 0 for very cheap options
+        if bid <= 0:
+            bid = tick
         return MarketContext(
             bid=bid,
             ask=ask,
