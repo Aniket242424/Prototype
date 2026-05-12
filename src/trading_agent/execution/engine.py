@@ -78,6 +78,130 @@ class ExecutionEngine:
         self._risk = risk_config or get_risk_config()
         self._settings = get_settings()
 
+    async def emergency_exit(
+        self,
+        instrument_key: str,
+        qty: int,
+        side: OrderSide,
+        reference_premium: Decimal,
+        reason: str,
+    ) -> ExecutionResult:
+        """
+        Emergency MARKET exit path — used by the Position Manager when a stop,
+        target, time-cutoff, or kill-switch trigger fires.
+
+        Differs from execute() in key ways:
+        - MARKET order (not LIMIT) — take whatever fill we can get
+        - Skips pre-flight slippage abort (emergency = price doesn't matter)
+        - No walk loop — single submission, immediate fill expected
+        - All slippage captured but doesn't gate the exit
+        """
+        if qty <= 0:
+            raise ExecutionError(f"emergency_exit called with non-positive qty={qty}")
+
+        mkt_ctx = await self._get_market_context(instrument_key, reference_premium)
+        side_str = "BUY" if side == OrderSide.BUY else "SELL"
+        slip_est = estimate_slippage_bps(
+            side=side_str,
+            target_qty_contracts=qty,
+            lot_size=1,
+            bid=mkt_ctx.bid,
+            ask=mkt_ctx.ask,
+            bid_qty=mkt_ctx.bid_qty,
+            ask_qty=mkt_ctx.ask_qty,
+        )
+
+        log.info(
+            "execution.emergency_exit.submitting",
+            instrument=instrument_key,
+            qty=qty,
+            side=side_str,
+            reason=reason,
+            estimated_slippage_bps=slip_est.estimated_bps,
+        )
+
+        req = OrderRequest(
+            instrument_key=instrument_key,
+            qty=qty,
+            order_type=OrderType.MARKET,
+            price=None,
+            side=side_str,
+        )
+        resp = await self._broker.submit(req, mkt_ctx)
+        if not resp.accepted:
+            log.error(
+                "execution.emergency_exit.broker_rejected",
+                instrument=instrument_key,
+                reason=resp.rejection_reason,
+            )
+            return ExecutionResult(
+                order_id=0,
+                status=OrderStatus.REJECTED,
+                fills=[],
+                realized_slippage_bps=0.0,
+                reference_mid=slip_est.reference_mid,
+                estimated_slippage_bps=slip_est.estimated_bps,
+                rejection_reason=resp.rejection_reason or "broker_rejected",
+                is_paper=self._broker.is_paper,
+            )
+
+        # Poll for fill — MARKET orders fill quickly in our paper sim. Live
+        # broker may need one or two poll cycles.
+        fills: list[Fill] = []
+        cumulative = 0
+        for _ in range(20):                      # ~5s max wait
+            events = await self._broker.poll_fills(resp.broker_order_id)
+            for ev in events:
+                cumulative = ev.cumulative_filled
+                fills.append(Fill(
+                    leg_index=0,
+                    qty=ev.filled_qty,
+                    price=ev.fill_price,
+                    fee=Decimal("0"),
+                    ts=ev.ts,
+                    is_paper=self._broker.is_paper,
+                ))
+                if ev.is_complete:
+                    avg = self._avg_price(fills)
+                    realized_bps = realized_slippage_bps(
+                        avg, slip_est.reference_mid, side_str
+                    )
+                    log.info(
+                        "execution.emergency_exit.filled",
+                        instrument=instrument_key,
+                        qty=cumulative,
+                        avg_price=str(avg),
+                        realized_slippage_bps=realized_bps,
+                        reason=reason,
+                    )
+                    return ExecutionResult(
+                        order_id=0,
+                        status=OrderStatus.FILLED,
+                        fills=fills,
+                        realized_slippage_bps=realized_bps,
+                        reference_mid=slip_est.reference_mid,
+                        estimated_slippage_bps=slip_est.estimated_bps,
+                        is_paper=self._broker.is_paper,
+                    )
+            await asyncio.sleep(0.25)
+
+        # Didn't fill in 5s — broker / liquidity issue. Caller logs + alerts.
+        log.error(
+            "execution.emergency_exit.no_fill_timeout",
+            instrument=instrument_key,
+            cumulative=cumulative,
+        )
+        return ExecutionResult(
+            order_id=0,
+            status=OrderStatus.PARTIAL if cumulative > 0 else OrderStatus.SENT,
+            fills=fills,
+            realized_slippage_bps=0.0,
+            reference_mid=slip_est.reference_mid,
+            estimated_slippage_bps=slip_est.estimated_bps,
+            rejection_reason="MARKET exit did not fill in 5s — broker / liquidity issue",
+            is_paper=self._broker.is_paper,
+        )
+
     async def execute(
         self,
         intent: TradeIntent,
