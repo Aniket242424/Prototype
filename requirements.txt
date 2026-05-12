@@ -25,4 +25,4 @@ structlog>=24.1
 cryptography>=42.0
 orjson>=3.9
 click>=8.1
-protobuf>=4.25
+protobuf>=5.27

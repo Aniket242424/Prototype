@@ -49,7 +49,7 @@ dependencies = [
     "cryptography>=42.0",             # token encryption
     "orjson>=3.9",
     "click>=8.1",                     # CLI scripts
-    "protobuf>=4.25",                 # Upstox v2 WS uses protobuf
+    "protobuf>=5.27",                 # MUST match version used to generate _pb2.py (currently 6.x via grpcio-tools 1.80)                 # Upstox v2 WS uses protobuf
 ]
 
 [project.optional-dependencies]
