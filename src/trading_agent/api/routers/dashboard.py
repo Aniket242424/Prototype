@@ -351,9 +351,9 @@ async def dashboard_status() -> dict[str, Any]:
             "phases": {
                 "phase_0_scaffold": "completed",
                 "phase_1_1_market_data": "completed",
-                "phase_1_2_chain_and_vix": "pending",
+                "phase_1_2_chain_and_vix": "completed",
                 "phase_2_regime_and_opportunity": "completed",
-                "phase_3_risk_and_execution": "pending",
+                "phase_3_risk_and_execution": "in_progress",
                 "phase_4_strategy_and_ai": "pending",
                 "phase_5_backtesting": "pending",
                 "phase_6_monitoring_and_learning": "pending",

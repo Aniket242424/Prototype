@@ -1,11 +1,22 @@
 """
-Risk Engine — Phase 3 (NOT YET IMPLEMENTED).
+Risk Engine — Phase 3.
 
-THE most important module. 16 deterministic checks, fail-closed.
-See ARCHITECTURE.md §3.7. Also contains the live-trading 3-lock check
-that gates every order toward the broker.
+The only path from a signal (Opportunity) to a broker order. 16 deterministic
+checks gate every trade. The live-trading 3-lock check is the first gate;
+nothing else runs until it's satisfied. See docs/architecture/risk_design.md.
 """
+from trading_agent.risk.dtos import (
+    ExecutionResult,
+    Fill,
+    Leg,
+    RiskDecision,
+    TradeIntent,
+)
 
-
-def _phase_marker():
-    raise NotImplementedError("Risk Engine — Phase 3")
+__all__ = [
+    "ExecutionResult",
+    "Fill",
+    "Leg",
+    "RiskDecision",
+    "TradeIntent",
+]
