@@ -27,20 +27,12 @@ dependencies = [
     "alembic>=1.13",
     "redis>=5.0",
 
-    # Quant / data
+    # Quant / data (lightweight only — heavy ones in extras)
     "pandas>=2.2",
     "numpy>=1.26",
-    "scipy>=1.12",                    # Greeks / Black-Scholes
-    "vectorbt>=0.26",                 # Phase 5 backtesting
-
-    # ML (Phase 6)
-    "xgboost>=2.0",
 
     # AI advisor
     "anthropic>=0.34",
-
-    # Upstox SDK is optional; we'll use httpx + websockets directly for control
-    # "upstox-python-sdk>=1.13",
 
     # Misc
     "pyyaml>=6.0",
@@ -49,19 +41,37 @@ dependencies = [
     "cryptography>=42.0",             # token encryption
     "orjson>=3.9",
     "click>=8.1",                     # CLI scripts
-    "protobuf>=5.27",                 # MUST match version used to generate _pb2.py (currently 6.x via grpcio-tools 1.80)                 # Upstox v2 WS uses protobuf
+    "protobuf>=5.27",                 # MUST match version used to generate _pb2.py
 ]
 
 [project.optional-dependencies]
-dev = [
+# Minimal install for running unit tests — fast (~30s in CI).
+test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.1",
+]
+
+# Full local dev stack — test + linters + interactive tools.
+dev = [
+    "trading_agent[test]",
     "ruff>=0.3",
     "mypy>=1.9",
     "black>=24.3",
     "ipython>=8.22",
     "rich>=13.7",
+]
+
+# Phase 5 backtesting deps (heavy: vectorbt + scipy, ~150 MB install).
+backtest = [
+    "vectorbt>=0.26",
+    "scipy>=1.12",                    # Black-Scholes Greeks if needed
+]
+
+# Phase 6 learning engine deps.
+ml = [
+    "xgboost>=2.0",
+    "scikit-learn>=1.4",
 ]
 
 [project.scripts]

@@ -25,9 +25,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
 
-      - name: Install project + dev extras
+      - name: Install project + test extras
         run: |
-          pip install -e ".[dev]"
+          pip install -e ".[test]"
 
       # Note: generated upstox_v3_pb2.py is committed to the repo, so we don't
       # need protoc in CI. If you update the .proto, run scripts/compile_protos.py
