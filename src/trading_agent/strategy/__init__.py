@@ -1,10 +1,21 @@
 """
-Strategy Engine — Phase 4 (NOT YET IMPLEMENTED).
+Strategy Engine — Phase 4.
 
-Five strategies: momentum_breakout, trend_continuation, volatility_expansion,
-gap_continuation, event_driven. See ARCHITECTURE.md §3.5.
+Converts an Opportunity (from Phase 2 ranker) into a concrete TradeIntent
+(consumed by Phase 3 Risk Engine). Each strategy is a class implementing
+the Strategy protocol. Phase 4 ships 5 strategies; this module hosts them
+plus the framework they share.
 """
+from trading_agent.strategy.base import (
+    Strategy,
+    StrategyContext,
+    StrategyReject,
+    StrategySignal,
+)
 
-
-def _phase_marker():
-    raise NotImplementedError("Strategy Engine — Phase 4")
+__all__ = [
+    "Strategy",
+    "StrategyContext",
+    "StrategyReject",
+    "StrategySignal",
+]
