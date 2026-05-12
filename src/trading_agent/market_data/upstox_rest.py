@@ -59,6 +59,29 @@ class UpstoxRestClient:
             raise AuthError(f"WS authorize response missing redirect URI: {body}")
         return WsAuthorization(redirect_uri=uri)
 
+    async def multi_quote_ltp(self, instrument_keys: list[str]) -> dict[str, dict]:
+        """
+        Fetch LTP for multiple instruments in one call. Used for index polling
+        because Upstox WS doesn't push live updates for INDEX instruments
+        (they're computed values, not traded). Endpoint returns ~10ms.
+
+        Returns: { "NSE_INDEX:Nifty 50": {"last_price": 23598.4, ...}, ... }
+                  Note the colon in returned key vs pipe in input key — Upstox quirk.
+        """
+        token = await self._bearer_token()
+        url = f"{self._api_root}/v2/market-quote/ltp"
+        # Upstox accepts comma-separated instrument keys in a single query param
+        params = {"instrument_key": ",".join(instrument_keys)}
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            r = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                params=params,
+            )
+        if r.status_code != 200:
+            raise MarketDataError(f"multi_quote_ltp failed: {r.status_code} {r.text[:200]}")
+        return r.json().get("data") or {}
+
     async def option_contracts(self, underlying_instrument_key: str) -> list[dict]:
         """List all option contracts for one underlying. Used to discover available expiries."""
         token = await self._bearer_token()

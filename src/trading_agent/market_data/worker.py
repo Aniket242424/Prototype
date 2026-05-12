@@ -26,6 +26,7 @@ from trading_agent.core.time_utils import is_market_open, now_ist
 from trading_agent.infrastructure.db import SessionLocal
 from trading_agent.infrastructure.redis_client import make_redis
 from trading_agent.market_data.expiry_resolver import ExpiryResolver
+from trading_agent.market_data.index_quote_poller import IndexQuotePoller
 from trading_agent.market_data.options_chain_poller import OptionsChainPoller
 from trading_agent.market_data.publisher import TickPublisher
 from trading_agent.market_data.repository import TickRepository
@@ -55,7 +56,10 @@ async def run() -> None:
     )
 
     rest = UpstoxRestClient(settings)
-    ws = UpstoxWebSocketClient(rest, instrument_keys=subscribe_keys, mode="ltpc")
+    # Note: indices need "full" mode (returns IndexFullFeed). LTPC mode works for
+    # tradeable instruments but indices don't emit LTPC frames — they have no
+    # "last trade" in the traditional sense; their value is continuously computed.
+    ws = UpstoxWebSocketClient(rest, instrument_keys=subscribe_keys, mode="full")
 
     redis = make_redis()
     repo = TickRepository(SessionLocal, flush_size=200, flush_interval_sec=1.0)
@@ -72,10 +76,23 @@ async def run() -> None:
         interval_sec=30.0,
         idle_interval_sec=300.0,
     )
+    # Index quote poller — workaround for Upstox WS not streaming INDEX instruments.
+    # Polls /v2/market-quote/ltp every 2s during market hours; routes synthetic
+    # ticks through the same path as WS ticks would.
+    index_poller = IndexQuotePoller(
+        rest=rest,
+        repository=repo,
+        publisher=publisher,
+        staleness=staleness,
+        instruments=instruments.instruments,
+        interval_sec=2.0,
+        idle_interval_sec=30.0,
+    )
 
     await repo.start()
     await vix_repo.start()
     await chain_poller.start()
+    await index_poller.start()
 
     # Worker heartbeat (consumed by dashboard) — TTL > heartbeat interval so a
     # crash makes the key expire and dashboard shows the worker as down.
@@ -151,6 +168,7 @@ async def run() -> None:
             await heartbeat_task
         except asyncio.CancelledError:
             pass
+        await index_poller.stop()
         await chain_poller.stop()
         await repo.stop()
         await vix_repo.stop()
@@ -160,6 +178,7 @@ async def run() -> None:
             frames=frame_count,
             ticks=tick_count,
             vix_ticks=vix_tick_count,
+            index_polled=index_poller.ticks_polled,
             persisted=repo.total_persisted,
             vix_persisted=vix_repo.total_persisted,
             chain_snapshots=chain_poller.snapshots_persisted,
