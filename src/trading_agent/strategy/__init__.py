@@ -12,10 +12,21 @@ from trading_agent.strategy.base import (
     StrategyReject,
     StrategySignal,
 )
+from trading_agent.strategy.ema_crossover import (
+    EMACrossoverConfig,
+    EMACrossoverTrendStrategy,
+)
+from trading_agent.strategy.orb import ORBConfig, ORBStrategy
+from trading_agent.strategy.registry import build_enabled_strategies
 
 __all__ = [
     "Strategy",
     "StrategyContext",
     "StrategyReject",
     "StrategySignal",
+    "EMACrossoverConfig",
+    "EMACrossoverTrendStrategy",
+    "ORBConfig",
+    "ORBStrategy",
+    "build_enabled_strategies",
 ]

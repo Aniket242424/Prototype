@@ -45,6 +45,10 @@ class StrategyContext:
 
     Strategies inspect this context, evaluate their entry triggers + filters,
     and return either a StrategySignal (proposing a trade) or None (no setup).
+
+    `opening_range_*` are populated by the Phase 4 worker for the
+    Opening Range Breakout strategy. Other strategies ignore them.
+    These are session-level state (frozen after 09:30 IST each day).
     """
 
     underlying: str
@@ -54,6 +58,15 @@ class StrategyContext:
     indicators: IndicatorSnapshot       # Current indicator snapshot
     intel: OptionsIntel | None          # None if intel not yet computed
     ts: datetime                         # When this evaluation is running
+
+    # ORB-specific session state — optional; only ORB strategy reads these
+    opening_range_high: float | None = None
+    opening_range_low: float | None = None
+    opening_range_formed: bool = False    # True after 09:30 IST when range is final
+
+    # Volume confirmation — current 1-min candle's volume vs 20-period avg
+    # (used by ORB and other breakout-based strategies; None when unknown)
+    volume_ratio: float | None = None
 
 
 class StrategyReject(Exception):
