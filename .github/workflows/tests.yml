@@ -29,9 +29,9 @@ jobs:
         run: |
           pip install -e ".[dev]"
 
-      - name: Compile protobufs
-        run: |
-          python scripts/compile_protos.py
+      # Note: generated upstox_v3_pb2.py is committed to the repo, so we don't
+      # need protoc in CI. If you update the .proto, run scripts/compile_protos.py
+      # locally and commit the regenerated _pb2.py.
 
       - name: Run unit tests
         run: |
