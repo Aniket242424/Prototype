@@ -207,6 +207,49 @@
     <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
   </div>
 
+  <div class="panel">
+    <h2>Risk Engine — today</h2>
+    <div id="risk-summary"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Slippage analytics — today</h2>
+    <div id="slippage-summary"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Recent risk decisions</h2>
+    <table id="risk-recent-table">
+      <thead><tr>
+        <th>Time</th>
+        <th>Result</th>
+        <th>Code</th>
+        <th>Reason</th>
+        <th class="num">Sized qty</th>
+        <th class="num">Max premium</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel full">
+    <h2>Recent orders &amp; fills</h2>
+    <table id="orders-recent-table">
+      <thead><tr>
+        <th>Order ID</th>
+        <th>Instrument</th>
+        <th>Side</th>
+        <th>Type</th>
+        <th class="num">Qty</th>
+        <th class="num">Limit</th>
+        <th>Status</th>
+        <th>Mode</th>
+        <th>Created</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <div class="panel full">
     <h2>Phase progress</h2>
     <div class="phase-list" id="phase-list"></div>
@@ -467,6 +510,61 @@ function render(d) {
          : "—");
     $("active-opportunity").style.color = "var(--muted)";
   }
+
+  // ---------- Phase 3 panels ----------
+  const risk = d.risk || { approvals_today: 0, rejections_today: 0, recent: [] };
+  const orders = d.orders || { filled_today: 0, recent: [] };
+  const slip = d.slippage || { fills_today: 0, avg_realized_bps: null, avg_estimated_bps: null, drift_bps: null, recent: [] };
+
+  $("risk-summary").innerHTML =
+    row("Approvals today", `<span class="value num">${fmtInt(risk.approvals_today)}</span>`) +
+    row("Rejections today", `<span class="value num">${fmtInt(risk.rejections_today)}</span>`) +
+    row("Filled orders today", `<span class="value num">${fmtInt(orders.filled_today)}</span>`);
+
+  $("slippage-summary").innerHTML =
+    row("Fills today", `<span class="value num">${fmtInt(slip.fills_today)}</span>`) +
+    row("Avg realized", `<span class="value num">${slip.avg_realized_bps === null ? "—" : fmtNum(slip.avg_realized_bps, 1) + " bps"}</span>`) +
+    row("Avg estimated", `<span class="value num">${slip.avg_estimated_bps === null ? "—" : fmtNum(slip.avg_estimated_bps, 1) + " bps"}</span>`) +
+    row("Drift (real − est)", `<span class="value num">${slip.drift_bps === null ? "—" : fmtNum(slip.drift_bps, 1) + " bps"}</span>`);
+
+  // Recent risk decisions table
+  const riskRows = (risk.recent || []).map(r => {
+    const resultBadge = r.approved ? badge("b-green", "APPROVED") : badge("b-amber", "REJECTED");
+    const codeBadge = badge(r.approved ? "b-blue" : "b-grey", r.code);
+    return `<tr>
+      <td class="small">${fmtTime(r.ts)}</td>
+      <td>${resultBadge}</td>
+      <td>${codeBadge}</td>
+      <td class="small">${r.reason || ""}</td>
+      <td class="num">${r.sized_qty === null ? "—" : fmtInt(r.sized_qty)}</td>
+      <td class="num">${r.max_premium === null ? "—" : "₹" + fmtNum(r.max_premium, 2)}</td>
+    </tr>`;
+  }).join("");
+  document.querySelector("#risk-recent-table tbody").innerHTML =
+    riskRows || `<tr><td colspan="6" class="small" style="color:var(--muted);text-align:center">No risk decisions yet</td></tr>`;
+
+  // Recent orders table
+  const orderRows = (orders.recent || []).map(o => {
+    const statusBadge = ({
+      FILLED: "b-green", PARTIAL: "b-amber",
+      CANCELLED: "b-grey", REJECTED: "b-red",
+      SENT: "b-blue", NEW: "b-blue",
+    })[o.status] || "b-grey";
+    const modeBadge = o.is_paper ? badge("b-blue", "PAPER") : badge("b-red", "LIVE");
+    return `<tr>
+      <td>${o.id}</td>
+      <td class="small">${o.instrument}</td>
+      <td>${o.side}</td>
+      <td>${o.type}</td>
+      <td class="num">${fmtInt(o.qty)}</td>
+      <td class="num">${o.limit === null ? "—" : fmtNum(o.limit, 2)}</td>
+      <td>${badge(statusBadge, o.status)}</td>
+      <td>${modeBadge}</td>
+      <td class="small">${fmtTime(o.created_at)}</td>
+    </tr>`;
+  }).join("");
+  document.querySelector("#orders-recent-table tbody").innerHTML =
+    orderRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No orders yet</td></tr>`;
 
   // Phases
   const phaseHtml = Object.entries(d.phases).map(([k, v]) => {

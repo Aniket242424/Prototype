@@ -24,13 +24,16 @@ from trading_agent.core.time_utils import IST, is_market_open, now_ist
 from trading_agent.infrastructure.db import session_scope
 from trading_agent.infrastructure.models import (
     AcknowledgmentLogRow,
+    ExecutionRow,
     IndiaVixRow,
     MarketDataTickRow,
     OpportunityRow,
     OptionsChainSnapshotRow,
+    OrderRow,
     PositionRow,
     RegimeStateRow,
     RiskDecisionRow,
+    SlippageLogRow,
     TokenRow,
 )
 from trading_agent.infrastructure.redis_client import make_redis
@@ -77,6 +80,123 @@ async def _regime_summary(redis) -> dict[str, Any]:
         except Exception:
             out[u] = None
     return out
+
+
+async def _risk_decisions_summary() -> dict[str, Any]:
+    """Last 10 risk decisions + today's approve/reject counts."""
+    try:
+        async with session_scope() as session:
+            today_start_utc = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            recent = (await session.execute(
+                select(RiskDecisionRow)
+                .order_by(RiskDecisionRow.ts.desc())
+                .limit(10)
+            )).scalars().all()
+            approvals = (await session.execute(
+                select(func.count(RiskDecisionRow.id))
+                .where(RiskDecisionRow.approved.is_(True))
+                .where(RiskDecisionRow.ts >= today_start_utc)
+            )).scalar() or 0
+            rejections = (await session.execute(
+                select(func.count(RiskDecisionRow.id))
+                .where(RiskDecisionRow.approved.is_(False))
+                .where(RiskDecisionRow.ts >= today_start_utc)
+            )).scalar() or 0
+        return {
+            "approvals_today": int(approvals),
+            "rejections_today": int(rejections),
+            "recent": [
+                {
+                    "ts": r.ts.isoformat() if r.ts else None,
+                    "approved": r.approved,
+                    "code": r.code,
+                    "reason": r.reason[:80] if r.reason else "",
+                    "sized_qty": r.sized_qty,
+                    "max_premium": float(r.max_premium) if r.max_premium is not None else None,
+                }
+                for r in recent
+            ],
+        }
+    except Exception:
+        return {"approvals_today": 0, "rejections_today": 0, "recent": []}
+
+
+async def _orders_summary() -> dict[str, Any]:
+    """Last 10 orders + summary counts. Includes both paper and live (when Phase 6 lands)."""
+    try:
+        async with session_scope() as session:
+            today_start_utc = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            recent = (await session.execute(
+                select(OrderRow)
+                .order_by(OrderRow.id.desc())
+                .limit(10)
+            )).scalars().all()
+            filled_today = (await session.execute(
+                select(func.count(OrderRow.id))
+                .where(OrderRow.status == "FILLED")
+                .where(OrderRow.created_at >= today_start_utc)
+            )).scalar() or 0
+        return {
+            "filled_today": int(filled_today),
+            "recent": [
+                {
+                    "id": o.id,
+                    "instrument": o.instrument_key,
+                    "side": o.side,
+                    "type": o.order_type,
+                    "qty": o.qty,
+                    "limit": float(o.limit_price) if o.limit_price else None,
+                    "status": o.status,
+                    "is_paper": o.is_paper,
+                    "created_at": o.created_at.isoformat() if o.created_at else None,
+                }
+                for o in recent
+            ],
+        }
+    except Exception:
+        return {"filled_today": 0, "recent": []}
+
+
+async def _slippage_summary() -> dict[str, Any]:
+    """Last 10 slippage rows + avg drift today (realized vs estimated)."""
+    try:
+        async with session_scope() as session:
+            today_start_utc = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            recent = (await session.execute(
+                select(SlippageLogRow)
+                .order_by(SlippageLogRow.ts.desc())
+                .limit(10)
+            )).scalars().all()
+            stats = (await session.execute(
+                select(
+                    func.avg(SlippageLogRow.realized_slippage_bps),
+                    func.avg(SlippageLogRow.estimated_slippage_bps),
+                    func.count(SlippageLogRow.id),
+                )
+                .where(SlippageLogRow.ts >= today_start_utc)
+            )).first()
+            avg_realized = float(stats[0]) if stats and stats[0] is not None else None
+            avg_estimated = float(stats[1]) if stats and stats[1] is not None else None
+            count = int(stats[2]) if stats and stats[2] is not None else 0
+        return {
+            "fills_today": count,
+            "avg_realized_bps": avg_realized,
+            "avg_estimated_bps": avg_estimated,
+            "drift_bps": (avg_realized - avg_estimated) if (avg_realized is not None and avg_estimated is not None) else None,
+            "recent": [
+                {
+                    "order_id": r.order_id,
+                    "ts": r.ts.isoformat() if r.ts else None,
+                    "reference_mid": float(r.reference_mid) if r.reference_mid is not None else None,
+                    "estimated_bps": float(r.estimated_slippage_bps),
+                    "realized_bps": float(r.realized_slippage_bps),
+                    "spread_bps": float(r.spread_bps_at_entry),
+                }
+                for r in recent
+            ],
+        }
+    except Exception:
+        return {"fills_today": 0, "avg_realized_bps": None, "avg_estimated_bps": None, "drift_bps": None, "recent": []}
 
 
 async def _intel_summary(redis) -> dict[str, Any]:
@@ -348,13 +468,18 @@ async def dashboard_status() -> dict[str, Any]:
             "opportunity": await _opportunity_summary(redis) if redis_ok else {"active": None, "ranking": []},
             "regime_worker_alive": bool(await redis.get("worker:regime:heartbeat")) if redis_ok else False,
             "trading": trading,
+            "risk": await _risk_decisions_summary(),
+            "orders": await _orders_summary(),
+            "slippage": await _slippage_summary(),
             "phases": {
                 "phase_0_scaffold": "completed",
                 "phase_1_1_market_data": "completed",
                 "phase_1_2_chain_and_vix": "completed",
                 "phase_2_regime_and_opportunity": "completed",
-                "phase_3_risk_and_execution": "in_progress",
-                "phase_4_strategy_and_ai": "pending",
+                "phase_3_1_risk_engine": "completed",
+                "phase_3_2_execution_engine": "completed",
+                "phase_4_strategy_and_position": "pending",
+                "phase_4_ai_advisor": "pending",
                 "phase_5_backtesting": "pending",
                 "phase_6_monitoring_and_learning": "pending",
             },
