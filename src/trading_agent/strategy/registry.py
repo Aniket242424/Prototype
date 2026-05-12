@@ -19,7 +19,9 @@ from trading_agent.core.config import StrategiesConfig, get_strategies_config
 from trading_agent.core.logging import get_logger
 from trading_agent.strategy.base import Strategy
 from trading_agent.strategy.ema_crossover import EMACrossoverConfig, EMACrossoverTrendStrategy
+from trading_agent.strategy.gap_continuation import GapContinuationConfig, GapContinuationStrategy
 from trading_agent.strategy.orb import ORBConfig, ORBStrategy
+from trading_agent.strategy.vol_expansion import VolExpansionConfig, VolExpansionStrategy
 
 log = get_logger(__name__)
 
@@ -46,11 +48,15 @@ def build_enabled_strategies(
         enabled["orb"] = ORBStrategy(ORBConfig())
         log.info("registry.enabled", strategy="orb")
 
-    # Phase 4.3 — will register when implemented:
-    # if cfg.volatility_expansion_enabled:
-    #     enabled["vol_expansion"] = VolExpansionStrategy()
-    # if cfg.gap_continuation_enabled:
-    #     enabled["gap_continuation"] = GapContinuationStrategy()
+    if cfg.volatility_expansion_enabled:
+        enabled["vol_expansion"] = VolExpansionStrategy(VolExpansionConfig())
+        log.info("registry.enabled", strategy="vol_expansion")
+
+    if cfg.gap_continuation_enabled:
+        enabled["gap_continuation"] = GapContinuationStrategy(GapContinuationConfig())
+        log.info("registry.enabled", strategy="gap_continuation")
+
+    # Phase 5+ event-driven strategy (deferred until news/calendar feed exists):
     # if cfg.event_driven_enabled:
     #     enabled["event_driven"] = EventDrivenStrategy()
 

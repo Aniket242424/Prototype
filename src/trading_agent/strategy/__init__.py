@@ -16,8 +16,16 @@ from trading_agent.strategy.ema_crossover import (
     EMACrossoverConfig,
     EMACrossoverTrendStrategy,
 )
+from trading_agent.strategy.gap_continuation import (
+    GapContinuationConfig,
+    GapContinuationStrategy,
+)
 from trading_agent.strategy.orb import ORBConfig, ORBStrategy
 from trading_agent.strategy.registry import build_enabled_strategies
+from trading_agent.strategy.vol_expansion import (
+    VolExpansionConfig,
+    VolExpansionStrategy,
+)
 
 __all__ = [
     "Strategy",
@@ -26,7 +34,11 @@ __all__ = [
     "StrategySignal",
     "EMACrossoverConfig",
     "EMACrossoverTrendStrategy",
+    "GapContinuationConfig",
+    "GapContinuationStrategy",
     "ORBConfig",
     "ORBStrategy",
+    "VolExpansionConfig",
+    "VolExpansionStrategy",
     "build_enabled_strategies",
 ]

@@ -68,6 +68,13 @@ class StrategyContext:
     # (used by ORB and other breakout-based strategies; None when unknown)
     volume_ratio: float | None = None
 
+    # Gap-related session state — only Gap Continuation strategy reads these.
+    # gap_pct:      today's open vs previous close, in percent.
+    #               Positive = gap up, negative = gap down, near-zero/None = no gap.
+    # session_open: today's first tick (09:15 IST).
+    gap_pct: float | None = None
+    session_open: float | None = None
+
 
 class StrategyReject(Exception):
     """
