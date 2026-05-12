@@ -232,6 +232,49 @@
     </table>
   </div>
 
+  <div class="panel">
+    <h2>AI advisor — today</h2>
+    <div id="advisor-summary"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Open positions</h2>
+    <div id="positions-summary"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Recent AI advisor decisions</h2>
+    <table id="advisor-recent-table">
+      <thead><tr>
+        <th>Time</th>
+        <th>Decision</th>
+        <th class="num">Advisor score</th>
+        <th class="num">Confidence</th>
+        <th>Rationale</th>
+        <th>Model</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="panel full">
+    <h2>Open positions detail</h2>
+    <table id="positions-detail-table">
+      <thead><tr>
+        <th>ID</th>
+        <th>Underlying</th>
+        <th>Direction</th>
+        <th class="num">Qty</th>
+        <th class="num">Entry premium</th>
+        <th class="num">Initial stop</th>
+        <th class="num">Target</th>
+        <th>Mode</th>
+        <th>Opened</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
   <div class="panel full">
     <h2>Recent orders &amp; fills</h2>
     <table id="orders-recent-table">
@@ -565,6 +608,65 @@ function render(d) {
   }).join("");
   document.querySelector("#orders-recent-table tbody").innerHTML =
     orderRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No orders yet</td></tr>`;
+
+  // ---------- Phase 4 panels ----------
+  const advisor = d.advisor || { calls_today: 0, vetoes_today: 0, recent: [] };
+  const positions = d.positions || { open_count: 0, open: [], closed_today: [] };
+
+  $("advisor-summary").innerHTML =
+    row("Calls today", `<span class="value num">${fmtInt(advisor.calls_today)}</span>`) +
+    row("Vetoes today", `<span class="value num">${fmtInt(advisor.vetoes_today)}</span>`) +
+    row("Phase 4 worker", d.phase4_worker_alive ? badge("b-green", "running") : badge("b-grey", "stopped"));
+
+  // Today's closed PnL
+  const pnlToday = (positions.closed_today || []).reduce(
+    (a, p) => a + (p.pnl_inr || 0), 0
+  );
+  const pnlBadge = pnlToday > 0
+    ? badge("b-green", "+₹" + fmtNum(pnlToday, 0))
+    : pnlToday < 0
+      ? badge("b-red", "₹" + fmtNum(pnlToday, 0))
+      : badge("b-grey", "₹0");
+  $("positions-summary").innerHTML =
+    row("Open positions", `<span class="value num">${fmtInt(positions.open_count)}</span>`) +
+    row("Closed today", `<span class="value num">${fmtInt((positions.closed_today || []).length)}</span>`) +
+    row("PnL today (closed)", pnlBadge);
+
+  // Recent advisor decisions
+  const advisorRows = (advisor.recent || []).map(r => {
+    const dBadge = ({
+      CALL: "b-green", PUT: "b-red", NO_TRADE: "b-amber",
+    })[r.decision] || "b-grey";
+    return `<tr>
+      <td class="small">${fmtTime(r.ts)}</td>
+      <td>${badge(dBadge, r.decision)}</td>
+      <td class="num">${fmtNum(r.advisor_score, 2)}</td>
+      <td class="num">${fmtNum(r.confidence, 2)}</td>
+      <td class="small">${r.rationale}</td>
+      <td class="small">${r.model}</td>
+    </tr>`;
+  }).join("");
+  document.querySelector("#advisor-recent-table tbody").innerHTML =
+    advisorRows || `<tr><td colspan="6" class="small" style="color:var(--muted);text-align:center">No advisor decisions yet</td></tr>`;
+
+  // Open positions detail
+  const posRows = (positions.open || []).map(p => {
+    const modeBadge = p.is_paper ? badge("b-blue", "PAPER") : badge("b-red", "LIVE");
+    const dirBadge = p.direction === "LONG" ? badge("b-green", "LONG") : badge("b-red", "SHORT");
+    return `<tr>
+      <td>${p.id}</td>
+      <td>${p.underlying}</td>
+      <td>${dirBadge}</td>
+      <td class="num">${fmtInt(p.qty)}</td>
+      <td class="num">${fmtNum(p.entry_premium, 2)}</td>
+      <td class="num">${p.initial_stop === null ? "—" : fmtNum(p.initial_stop, 2)}</td>
+      <td class="num">${p.target === null ? "—" : fmtNum(p.target, 2)}</td>
+      <td>${modeBadge}</td>
+      <td class="small">${fmtAge(p.opened_at)}</td>
+    </tr>`;
+  }).join("");
+  document.querySelector("#positions-detail-table tbody").innerHTML =
+    posRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No open positions</td></tr>`;
 
   // Phases
   const phaseHtml = Object.entries(d.phases).map(([k, v]) => {

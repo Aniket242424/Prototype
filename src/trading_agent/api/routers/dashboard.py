@@ -24,6 +24,7 @@ from trading_agent.core.time_utils import IST, is_market_open, now_ist
 from trading_agent.infrastructure.db import session_scope
 from trading_agent.infrastructure.models import (
     AcknowledgmentLogRow,
+    AiDecisionRow,
     ExecutionRow,
     IndiaVixRow,
     MarketDataTickRow,
@@ -34,6 +35,7 @@ from trading_agent.infrastructure.models import (
     RegimeStateRow,
     RiskDecisionRow,
     SlippageLogRow,
+    StrategySignalRow,
     TokenRow,
 )
 from trading_agent.infrastructure.redis_client import make_redis
@@ -155,6 +157,121 @@ async def _orders_summary() -> dict[str, Any]:
         }
     except Exception:
         return {"filled_today": 0, "recent": []}
+
+
+async def _advisor_summary() -> dict[str, Any]:
+    """Last 10 AI advisor decisions + today's veto count."""
+    try:
+        async with session_scope() as session:
+            today_start_utc = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            recent = (await session.execute(
+                select(AiDecisionRow)
+                .order_by(AiDecisionRow.ts.desc())
+                .limit(10)
+            )).scalars().all()
+            calls_today = (await session.execute(
+                select(func.count(AiDecisionRow.id))
+                .where(AiDecisionRow.ts >= today_start_utc)
+            )).scalar() or 0
+            vetoes_today = (await session.execute(
+                select(func.count(AiDecisionRow.id))
+                .where(AiDecisionRow.decision == "NO_TRADE")
+                .where(AiDecisionRow.ts >= today_start_utc)
+            )).scalar() or 0
+        return {
+            "calls_today": int(calls_today),
+            "vetoes_today": int(vetoes_today),
+            "recent": [
+                {
+                    "ts": r.ts.isoformat() if r.ts else None,
+                    "decision": r.decision,
+                    "advisor_score": float(r.advisor_score),
+                    "confidence": float(r.confidence),
+                    "rationale": (r.rationale or "")[:120],
+                    "model": r.model,
+                }
+                for r in recent
+            ],
+        }
+    except Exception:
+        return {"calls_today": 0, "vetoes_today": 0, "recent": []}
+
+
+async def _positions_summary() -> dict[str, Any]:
+    """Open positions + today's closed positions with PnL."""
+    try:
+        async with session_scope() as session:
+            today_start_utc = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            open_rows = (await session.execute(
+                select(PositionRow)
+                .where(PositionRow.is_open.is_(True))
+                .order_by(PositionRow.opened_at.desc())
+            )).scalars().all()
+            closed_today = (await session.execute(
+                select(PositionRow)
+                .where(PositionRow.closed_at >= today_start_utc)
+                .order_by(PositionRow.closed_at.desc())
+                .limit(10)
+            )).scalars().all()
+        return {
+            "open_count": len(open_rows),
+            "open": [
+                {
+                    "id": p.id,
+                    "underlying": p.underlying,
+                    "direction": p.direction,
+                    "qty": p.qty,
+                    "entry_premium": float(p.avg_entry_price),
+                    "initial_stop": float(p.initial_stop) if p.initial_stop else None,
+                    "target": float(p.target) if p.target else None,
+                    "is_paper": p.is_paper,
+                    "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+                }
+                for p in open_rows
+            ],
+            "closed_today": [
+                {
+                    "id": p.id,
+                    "underlying": p.underlying,
+                    "direction": p.direction,
+                    "pnl_inr": float(p.pnl_inr) if p.pnl_inr is not None else None,
+                    "closed_at": p.closed_at.isoformat() if p.closed_at else None,
+                }
+                for p in closed_today
+            ],
+        }
+    except Exception:
+        return {"open_count": 0, "open": [], "closed_today": []}
+
+
+async def _strategy_signals_summary() -> dict[str, Any]:
+    """Last 10 strategy signals + today's emission count by strategy."""
+    try:
+        async with session_scope() as session:
+            today_start_utc = now_ist().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+            recent = (await session.execute(
+                select(StrategySignalRow)
+                .order_by(StrategySignalRow.ts.desc())
+                .limit(10)
+            )).scalars().all()
+            counts = (await session.execute(
+                select(StrategySignalRow.strategy_name, func.count(StrategySignalRow.id))
+                .where(StrategySignalRow.ts >= today_start_utc)
+                .group_by(StrategySignalRow.strategy_name)
+            )).all()
+        return {
+            "signals_today_by_strategy": {name: int(c) for name, c in counts},
+            "recent": [
+                {
+                    "ts": r.ts.isoformat() if r.ts else None,
+                    "strategy": r.strategy_name,
+                    "intent": r.intent,
+                }
+                for r in recent
+            ],
+        }
+    except Exception:
+        return {"signals_today_by_strategy": {}, "recent": []}
 
 
 async def _slippage_summary() -> dict[str, Any]:
@@ -471,6 +588,10 @@ async def dashboard_status() -> dict[str, Any]:
             "risk": await _risk_decisions_summary(),
             "orders": await _orders_summary(),
             "slippage": await _slippage_summary(),
+            "advisor": await _advisor_summary(),
+            "positions": await _positions_summary(),
+            "strategy_signals": await _strategy_signals_summary(),
+            "phase4_worker_alive": bool(await redis.get("worker:phase4:heartbeat")) if redis_ok else False,
             "phases": {
                 "phase_0_scaffold": "completed",
                 "phase_1_1_market_data": "completed",
@@ -478,8 +599,12 @@ async def dashboard_status() -> dict[str, Any]:
                 "phase_2_regime_and_opportunity": "completed",
                 "phase_3_1_risk_engine": "completed",
                 "phase_3_2_execution_engine": "completed",
-                "phase_4_strategy_and_position": "pending",
-                "phase_4_ai_advisor": "pending",
+                "phase_4_1_strategy_framework": "completed",
+                "phase_4_2_orb_and_registry": "completed",
+                "phase_4_3_vol_gap_strategies": "completed",
+                "phase_4_4_position_manager": "completed",
+                "phase_4_5_ai_advisor": "completed",
+                "phase_4_6_worker_orchestrator": "completed",
                 "phase_5_backtesting": "pending",
                 "phase_6_monitoring_and_learning": "pending",
             },
