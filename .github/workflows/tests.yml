@@ -1,0 +1,59 @@
+name: tests
+
+on:
+  push:
+    branches: ['**']         # run on every branch
+  pull_request:
+    branches: [trading-agent, master, main]
+
+jobs:
+  unit-tests:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build deps
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install project + dev extras
+        run: |
+          pip install -e ".[dev]"
+
+      - name: Compile protobufs
+        run: |
+          python scripts/compile_protos.py
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -v --tb=short
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff
+        run: ruff check src/ tests/ scripts/
+        continue-on-error: true  # don't block on style for now; revisit pre-Phase 3
