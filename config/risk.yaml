@@ -9,7 +9,7 @@ rolling_drawdown_pct: 0.05            # 5% = ₹15,000 over rolling 5d window
 rolling_drawdown_window_days: 5
 
 # --- Per-trade ---
-per_trade_max_risk_pct: 0.005         # 0.5% = ₹1,500 max outlay
+per_trade_max_risk_pct: 0.03          # 3% = ₹9,000 max outlay (paper sizing — fits 1 lot of all 5 indices)
 max_concurrent_positions: 1           # one position at a time, period
 max_trades_per_day: 3
 consecutive_loss_lockout: 2           # 2 consecutive losses → trading disabled rest of day

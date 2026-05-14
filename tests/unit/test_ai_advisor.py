@@ -187,8 +187,9 @@ async def test_advisor_falls_back_on_invalid_json():
     decision = await advisor.evaluate(
         _signal(), _regime(), _intel(), _indicators(), _opportunity()
     )
-    # Should fall back to neutral (advisor_score=0.5, doesn't veto)
-    assert decision.advisor_score == 0.5
+    # Should fall back to neutral pass-through (advisor_score=1.0, doesn't veto, no sizing penalty)
+    assert decision.advisor_score == 1.0  # pass-through fallback
+    assert decision.vetoes_trade is False
     assert "fallback" in decision.rationale.lower()
 
 
@@ -198,7 +199,7 @@ async def test_advisor_falls_back_on_invalid_decision_value():
     decision = await advisor.evaluate(
         _signal(), _regime(), _intel(), _indicators(), _opportunity()
     )
-    assert decision.advisor_score == 0.5
+    assert decision.advisor_score == 1.0  # pass-through fallback
     assert decision.decision in ("CALL", "PUT", "NO_TRADE")
 
 
@@ -221,7 +222,7 @@ async def test_advisor_falls_back_on_api_exception():
     decision = await advisor.evaluate(
         _signal(), _regime(), _intel(), _indicators(), _opportunity()
     )
-    assert decision.advisor_score == 0.5
+    assert decision.advisor_score == 1.0  # pass-through fallback
     assert "API error" in decision.rationale
 
 
@@ -230,7 +231,7 @@ async def test_advisor_falls_back_on_empty_response():
     decision = await advisor.evaluate(
         _signal(), _regime(), _intel(), _indicators(), _opportunity()
     )
-    assert decision.advisor_score == 0.5
+    assert decision.advisor_score == 1.0  # pass-through fallback
 
 
 async def test_veto_threshold_at_055():
@@ -276,5 +277,5 @@ async def test_advisor_disabled_when_no_api_key():
     decision = await advisor.evaluate(
         _signal(), _regime(), _intel(), _indicators(), _opportunity()
     )
-    assert decision.advisor_score == 0.5
+    assert decision.advisor_score == 1.0  # pass-through fallback
     assert "disabled" in decision.rationale.lower()

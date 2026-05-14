@@ -107,6 +107,38 @@
     justify-content: space-between;
   }
   .err { color: var(--red); font-size: 12px; }
+  .btn {
+    display: inline-block;
+    padding: 5px 12px;
+    margin-right: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-green { border-color: rgba(63,185,80,0.5); color: var(--green); }
+  .btn-green:hover:not(:disabled) { background: rgba(63,185,80,0.1); }
+  .btn-red { border-color: rgba(248,81,73,0.5); color: var(--red); }
+  .btn-red:hover:not(:disabled) { background: rgba(248,81,73,0.1); }
+  .btn-amber { border-color: rgba(210,153,34,0.5); color: var(--amber); }
+  .btn-amber:hover:not(:disabled) { background: rgba(210,153,34,0.1); }
+  .worker-row { display: grid; grid-template-columns: 130px 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .worker-row:last-child { border-bottom: 0; }
+  .worker-name { font-weight: 600; }
+  .control-toast {
+    position: fixed; bottom: 16px; right: 16px;
+    padding: 10px 14px; border-radius: 6px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    font-size: 12px; max-width: 360px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    z-index: 1000;
+    transition: opacity 0.3s;
+  }
 </style>
 </head>
 <body>
@@ -121,6 +153,22 @@
 </header>
 
 <main id="main">
+  <div class="panel full">
+    <h2>System Control</h2>
+    <div id="workers-rows"></div>
+    <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-green" onclick="ctrl('POST','/control/workers/start','Starting all workers')">Start All</button>
+      <button class="btn btn-red"   onclick="ctrl('POST','/control/workers/stop','Stopping all workers')">Stop All</button>
+      <button class="btn btn-amber" onclick="ctrl('POST','/control/workers/restart','Restarting all workers')">Restart All Workers</button>
+      <span style="flex:1"></span>
+      <button class="btn btn-amber" onclick="restartAPI()">Restart API + Workers</button>
+    </div>
+    <div class="small" style="margin-top:8px;color:var(--muted)">
+      Workers auto-start when the API boots. Use Restart All Workers after editing config (e.g. lot sizes).
+      Restart API also restarts workers; expect ~5s of dashboard downtime.
+    </div>
+  </div>
+
   <div class="panel">
     <h2>Infrastructure</h2>
     <div id="infra-rows"></div>
@@ -353,6 +401,81 @@ async function refresh() {
     $("last-update").textContent = "ERROR: " + e.message;
     $("last-update").style.color = "var(--red)";
   }
+  // Workers status is on its own endpoint, refreshed alongside dashboard
+  try {
+    const w = await fetch("/control/workers");
+    if (w.ok) renderWorkers(await w.json());
+  } catch {}
+}
+
+function renderWorkers(status) {
+  const order = ["market_data", "regime", "strategy"];
+  const rows = order.map(name => {
+    const s = status[name] || {};
+    const bdg = s.running
+      ? badge("b-green", "RUNNING")
+      : (s.exit_code !== null && s.exit_code !== undefined
+          ? badge("b-red", "EXITED " + s.exit_code)
+          : badge("b-grey", "STOPPED"));
+    const pid = s.pid ? `pid ${s.pid}` : "—";
+    const started = s.started_at ? fmtAge(s.started_at) : "—";
+    return `<div class="worker-row">
+      <span class="worker-name">${name}</span>
+      ${bdg}
+      <span class="small">${pid} · started ${started}</span>
+      <span>
+        <button class="btn btn-green" onclick="ctrl('POST','/control/workers/${name}/start','Start ${name}')">Start</button>
+        <button class="btn btn-red"   onclick="ctrl('POST','/control/workers/${name}/stop','Stop ${name}')">Stop</button>
+        <button class="btn btn-amber" onclick="ctrl('POST','/control/workers/${name}/restart','Restart ${name}')">Restart</button>
+      </span>
+    </div>`;
+  }).join("");
+  $("workers-rows").innerHTML = rows;
+}
+
+function toast(msg, color) {
+  const el = document.createElement("div");
+  el.className = "control-toast";
+  el.textContent = msg;
+  if (color) el.style.borderColor = color;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = "0"; }, 2500);
+  setTimeout(() => { el.remove(); }, 3000);
+}
+
+async function ctrl(method, url, label) {
+  toast(label + "…", "var(--amber)");
+  try {
+    const r = await fetch(url, {method});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    toast(label + " ✓", "var(--green)");
+    setTimeout(refresh, 600);  // give the spawn/exit a moment
+  } catch (e) {
+    toast(label + " failed: " + e.message, "var(--red)");
+  }
+}
+
+async function restartAPI() {
+  if (!confirm("Restart API + all workers? Dashboard will be unreachable for ~5s.")) return;
+  toast("Restarting API…", "var(--amber)");
+  try {
+    await fetch("/control/api/restart", {method: "POST"});
+  } catch {}
+  // Poll for API to come back
+  let tries = 0;
+  const poll = setInterval(async () => {
+    tries++;
+    try {
+      const r = await fetch("/health", {cache: "no-store"});
+      if (r.ok) {
+        clearInterval(poll);
+        toast("API back online ✓", "var(--green)");
+        setTimeout(refresh, 500);
+      }
+    } catch {}
+    if (tries > 30) { clearInterval(poll); toast("API didn't come back in 30s", "var(--red)"); }
+  }, 1000);
 }
 
 function render(d) {
@@ -622,7 +745,7 @@ function render(d) {
   const pnlToday = (positions.closed_today || []).reduce(
     (a, p) => a + (p.pnl_inr || 0), 0
   );
-  const pnlBadge = pnlToday > 0
+  const closedPnlBadge = pnlToday > 0
     ? badge("b-green", "+₹" + fmtNum(pnlToday, 0))
     : pnlToday < 0
       ? badge("b-red", "₹" + fmtNum(pnlToday, 0))
@@ -630,7 +753,7 @@ function render(d) {
   $("positions-summary").innerHTML =
     row("Open positions", `<span class="value num">${fmtInt(positions.open_count)}</span>`) +
     row("Closed today", `<span class="value num">${fmtInt((positions.closed_today || []).length)}</span>`) +
-    row("PnL today (closed)", pnlBadge);
+    row("PnL today (closed)", closedPnlBadge);
 
   // Recent advisor decisions
   const advisorRows = (advisor.recent || []).map(r => {

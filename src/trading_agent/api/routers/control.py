@@ -1,7 +1,11 @@
-"""Operational control plane: kill switch, live-trading status."""
+"""Operational control plane: kill switch, live-trading status, worker supervisor."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
+import sys
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +17,7 @@ from trading_agent.core.kill_switch import KillSwitch
 from trading_agent.infrastructure.db import session_scope
 from trading_agent.infrastructure.models import AcknowledgmentLogRow
 from trading_agent.infrastructure.redis_client import make_redis
+from trading_agent.supervisor import WORKERS, get_supervisor
 
 router = APIRouter(prefix="/control", tags=["control"])
 
@@ -61,6 +66,90 @@ async def reset(payload: ResetPayload):
     finally:
         await r.aclose()
     return {"tripped": state.tripped}
+
+
+# ============================================================
+# Worker supervisor — start/stop/restart trading workers from the dashboard
+# ============================================================
+
+def _check_worker_name(name: str) -> None:
+    if name not in WORKERS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown worker '{name}'. Valid: {sorted(WORKERS.keys())}",
+        )
+
+
+@router.get("/workers")
+async def workers_status():
+    """Status of all 3 workers (running/stopped, pid, started_at, log path)."""
+    return get_supervisor().status()
+
+
+@router.post("/workers/start")
+async def workers_start_all():
+    """Start any workers that are not already running."""
+    return get_supervisor().start_all()
+
+
+@router.post("/workers/stop")
+async def workers_stop_all():
+    """Stop all running workers."""
+    return get_supervisor().stop_all()
+
+
+@router.post("/workers/restart")
+async def workers_restart_all():
+    """Stop + start all workers (use after config changes)."""
+    return get_supervisor().restart_all()
+
+
+@router.post("/workers/{name}/start")
+async def workers_start_one(name: str):
+    _check_worker_name(name)
+    return get_supervisor().start(name)
+
+
+@router.post("/workers/{name}/stop")
+async def workers_stop_one(name: str):
+    _check_worker_name(name)
+    return get_supervisor().stop(name)
+
+
+@router.post("/workers/{name}/restart")
+async def workers_restart_one(name: str):
+    _check_worker_name(name)
+    return get_supervisor().restart(name)
+
+
+@router.get("/workers/{name}/logs")
+async def workers_tail_log(name: str, lines: int = 50):
+    _check_worker_name(name)
+    return {"name": name, "lines": get_supervisor().tail_log(name, lines=lines)}
+
+
+# ============================================================
+# API self-restart — workers cleaned up, then exit(0).
+# A watchdog (start.bat) restarts the API process.
+# ============================================================
+
+@router.post("/api/restart")
+async def api_restart():
+    """
+    Cleanly stop all workers, then exit the API process.
+    The start.bat watchdog will respawn the API within ~2s.
+    """
+    sup = get_supervisor()
+    sup.stop_all()
+
+    # Schedule a delayed os._exit so this response can flush to the client
+    def _delayed_exit():
+        import time
+        time.sleep(0.5)
+        os._exit(0)
+
+    threading.Thread(target=_delayed_exit, daemon=True).start()
+    return {"ok": True, "status": "exiting", "respawn_via": "start.bat watchdog"}
 
 
 @router.get("/live-trading-status")

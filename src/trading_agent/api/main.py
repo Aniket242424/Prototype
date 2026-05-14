@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from trading_agent.api.routers import auth, control, dashboard, health
 from trading_agent.core.config import get_settings
 from trading_agent.core.logging import configure_logging, get_logger
+from trading_agent.supervisor import get_supervisor
 
 configure_logging()
 log = get_logger(__name__)
@@ -34,8 +35,16 @@ async def lifespan(app: FastAPI):
         live_trading=settings.live_trading,
         capital_inr=settings.trading_capital_inr,
     )
-    yield
-    log.info("app.stopping")
+    # Auto-start all workers on API boot so the system comes up as a unit.
+    # Idempotent: start_all() skips workers that are already running.
+    sup = get_supervisor()
+    result = sup.start_all()
+    log.info("supervisor.auto_started", result=result)
+    try:
+        yield
+    finally:
+        log.info("app.stopping")
+        sup.stop_all()
 
 
 app = FastAPI(

@@ -10,7 +10,7 @@ instruments:
   - name: NIFTY
     upstox_instrument_key: "NSE_INDEX|Nifty 50"
     exchange: NSE_INDEX
-    lot_size: 25
+    lot_size: 65
     tick_size: 0.05
     expiry_weekday: 3
     enabled: true
@@ -18,7 +18,7 @@ instruments:
   - name: BANKNIFTY
     upstox_instrument_key: "NSE_INDEX|Nifty Bank"
     exchange: NSE_INDEX
-    lot_size: 15
+    lot_size: 30
     tick_size: 0.05
     expiry_weekday: 2
     enabled: true
@@ -26,7 +26,7 @@ instruments:
   - name: FINNIFTY
     upstox_instrument_key: "NSE_INDEX|Nifty Fin Service"
     exchange: NSE_INDEX
-    lot_size: 25
+    lot_size: 60
     tick_size: 0.05
     expiry_weekday: 1
     enabled: true
@@ -34,7 +34,7 @@ instruments:
   - name: SENSEX
     upstox_instrument_key: "BSE_INDEX|SENSEX"
     exchange: BSE_INDEX
-    lot_size: 10
+    lot_size: 20
     tick_size: 0.05
     expiry_weekday: 4
     enabled: true
@@ -42,7 +42,7 @@ instruments:
   - name: BANKEX
     upstox_instrument_key: "BSE_INDEX|BANKEX"
     exchange: BSE_INDEX
-    lot_size: 15
+    lot_size: 30
     tick_size: 0.05
     expiry_weekday: 0
     enabled: true

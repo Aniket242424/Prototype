@@ -39,13 +39,19 @@ from trading_agent.strategy.base import StrategySignal
 log = get_logger(__name__)
 
 
-# Sentinel returned when API fails / disabled / invalid response
+# Sentinel returned when API fails / disabled / invalid response.
+#
+# advisor_score=1.0 (not 0.5) is INTENTIONAL: when the advisor abstains we
+# want the deterministic stack to decide alone — that means no veto
+# (vetoes_trade checks score < 0.55) AND no sizing penalty (Risk Engine
+# uses advisor_score as a confidence multiplier). The `rationale` field
+# preserves the "this was a fallback, not a real opinion" audit trail.
 def _neutral_fallback(decision_letter: str, model: str, reason: str) -> AdvisorDecision:
     return AdvisorDecision(
         decision=decision_letter,
         confidence=0.5,
-        advisor_score=0.5,
-        rationale=f"Neutral fallback: {reason}",
+        advisor_score=1.0,
+        rationale=f"Neutral fallback (pass-through): {reason}",
         warnings=[],
         model=model,
         raw_response_text="",
