@@ -14,8 +14,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
+
+from trading_agent.api.auth_basic import verify_credentials
 from sqlalchemy import func, select
 
 from trading_agent.core.config import REPO_ROOT, get_instruments_config, get_settings
@@ -40,7 +42,7 @@ from trading_agent.infrastructure.models import (
 )
 from trading_agent.infrastructure.redis_client import make_redis
 
-router = APIRouter(tags=["dashboard"])
+router = APIRouter(tags=["dashboard"], dependencies=[Depends(verify_credentials)])
 
 
 async def _vix_summary() -> dict[str, Any]:

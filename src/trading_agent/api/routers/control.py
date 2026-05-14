@@ -8,10 +8,11 @@ import sys
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from trading_agent.api.auth_basic import verify_credentials
 from trading_agent.core.config import REPO_ROOT, get_settings
 from trading_agent.core.kill_switch import KillSwitch
 from trading_agent.infrastructure.db import session_scope
@@ -19,7 +20,9 @@ from trading_agent.infrastructure.models import AcknowledgmentLogRow
 from trading_agent.infrastructure.redis_client import make_redis
 from trading_agent.supervisor import WORKERS, get_supervisor
 
-router = APIRouter(prefix="/control", tags=["control"])
+router = APIRouter(
+    prefix="/control", tags=["control"], dependencies=[Depends(verify_credentials)]
+)
 
 
 class TripPayload(BaseModel):

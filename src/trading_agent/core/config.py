@@ -75,6 +75,12 @@ class AppSettings(BaseSettings):
     telegram_chat_id: str | None = None
     discord_webhook_url: SecretStr | None = None
 
+    # --- Dashboard HTTP Basic Auth (for publicly-tunneled dashboards) ---
+    # When both are set, all /dashboard and /control routes require these credentials.
+    # When unset/empty, no auth is required (dev mode, local-only access).
+    dashboard_username: str = ""
+    dashboard_password: SecretStr | None = None
+
     @property
     def database_url(self) -> str:
         pw = quote_plus(self.postgres_password.get_secret_value())
