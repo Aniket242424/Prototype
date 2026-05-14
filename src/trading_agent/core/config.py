@@ -61,8 +61,11 @@ class AppSettings(BaseSettings):
 
     # --- AWS Bedrock (only used when advisor_backend == "bedrock") ---
     aws_region: str = "ap-south-1"
-    # Default to Claude Haiku 4.5 — cheapest Claude on Bedrock, plenty smart for veto/JSON output
-    bedrock_model_id: str = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Default to Claude Haiku 4.5 cross-region inference profile (Asia-Pacific).
+    # The `apac.` prefix is required for Mumbai (ap-south-1) since the model is
+    # served via cross-region inference, not direct invocation. For US, use
+    # "us.anthropic.claude-haiku-4-5-20251001-v1:0".
+    bedrock_model_id: str = "apac.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # --- Postgres ---
     postgres_host: str = "localhost"
