@@ -50,9 +50,19 @@ class AppSettings(BaseSettings):
     upstox_base_url: str = "https://api.upstox.com/v2"
     upstox_ws_url: str = "wss://api.upstox.com/v2/feed/market-data-feed"
 
-    # --- Anthropic ---
+    # --- AI advisor backend ---
+    # "anthropic" → direct Anthropic API (uses ANTHROPIC_API_KEY)
+    # "bedrock"   → AWS Bedrock (uses IAM role on EC2, or AWS_ACCESS_KEY_ID/SECRET locally)
+    advisor_backend: Literal["anthropic", "bedrock"] = "anthropic"
+
+    # --- Anthropic (direct API) ---
     anthropic_api_key: SecretStr
     anthropic_model: str = "claude-opus-4-7"
+
+    # --- AWS Bedrock (only used when advisor_backend == "bedrock") ---
+    aws_region: str = "ap-south-1"
+    # Default to Claude Haiku 4.5 — cheapest Claude on Bedrock, plenty smart for veto/JSON output
+    bedrock_model_id: str = "anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # --- Postgres ---
     postgres_host: str = "localhost"

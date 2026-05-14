@@ -1,20 +1,25 @@
 """
-Claude advisor — calls the Anthropic API for a structured second opinion.
+Claude advisor — structured second opinion via direct Anthropic API or AWS Bedrock.
+
+Backends (selected by `advisor_backend` setting):
+  - "anthropic" (default): direct Anthropic API; needs ANTHROPIC_API_KEY.
+  - "bedrock":             AWS Bedrock; needs IAM permissions (instance role
+                            on EC2, or AWS_ACCESS_KEY_ID/SECRET locally). Costs
+                            hit your AWS bill instead of Anthropic invoice.
 
 Resilience properties:
 - Timeout: 5s. AI cannot block trading on slow responses.
-- Invalid JSON: fallback to NEUTRAL advisor_score=0.5 (doesn't veto, doesn't
-  upgrade — lets deterministic stack decide alone).
-- API failure: same neutral fallback.
-- Caching: hash of (signal + context) is cached in Redis for 60s to avoid
-  redundant calls within the same opportunity-evaluation cycle.
+- Invalid JSON: fallback to NEUTRAL advisor_score=1.0 (pass-through, no veto, no sizing penalty).
+- API failure (either backend): same neutral fallback.
+- Caching: hash of (signal + context) cached in Redis for 60s.
 
-The advisor is OPTIONAL. If you don't have an ANTHROPIC_API_KEY set, you
-can run the system without it — the worker just skips advisor calls and
-uses advisor_score=0.5 default everywhere.
+The advisor is OPTIONAL — if the backend isn't reachable (no API key for
+Anthropic, or no IAM perms for Bedrock), the worker falls through to the
+deterministic stack alone.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime
@@ -87,10 +92,11 @@ def _hash_inputs(
 
 class ClaudeAdvisor:
     """
-    Wraps the Anthropic API for trade-proposal evaluation.
+    Trade-proposal evaluator. Backend = anthropic (direct) | bedrock (AWS).
 
     Pass `redis=None` to disable caching (useful in tests).
-    Pass `client_override` to inject a mock for testing.
+    Pass `client_override` to inject a mock for testing — when set, mock is used
+    regardless of backend, so existing tests don't depend on backend choice.
     """
 
     def __init__(
@@ -107,12 +113,24 @@ class ClaudeAdvisor:
         self._timeout_sec = timeout_sec
         self._cache_ttl_sec = cache_ttl_sec
         self._max_tokens = max_tokens
-        # Lazy: import anthropic only when needed (and not in tests with mock)
+        self._backend = self._settings.advisor_backend
+        # Mock client for tests (Anthropic SDK-shaped); when set, bypasses real backends
         self._client = client_override
-        self._enabled = bool(
-            client_override is not None
-            or self._settings.anthropic_api_key.get_secret_value() not in ("", "replace_me")
-        )
+        self._bedrock_client = None  # lazy-init
+
+        if client_override is not None:
+            self._enabled = True
+        elif self._backend == "bedrock":
+            # Bedrock uses IAM role/keys discovered by boto3 — always assume enabled.
+            # If perms are wrong the actual invoke_model call will fail and the
+            # neutral fallback kicks in.
+            self._enabled = True
+        else:
+            # Direct Anthropic API
+            self._enabled = bool(
+                self._settings.anthropic_api_key.get_secret_value()
+                not in ("", "replace_me")
+            )
 
     async def evaluate(
         self,
@@ -130,7 +148,12 @@ class ClaudeAdvisor:
         """
         # Sensible default decision letter based on direction
         default_letter = "CALL" if signal.direction.value == "LONG" else "PUT"
-        model = self._settings.anthropic_model
+        # `model` is used in the AdvisorDecision audit field. Reflects what we actually called.
+        model = (
+            self._settings.bedrock_model_id
+            if (self._backend == "bedrock" and self._client is None)
+            else self._settings.anthropic_model
+        )
 
         if not self._enabled:
             return _neutral_fallback(default_letter, model, "advisor disabled (no API key)")
@@ -157,12 +180,17 @@ class ClaudeAdvisor:
             signal, regime, intel, indicators, opportunity
         )
 
-        # API call
+        # API call — route to the chosen backend (mock client always wins for tests)
         try:
-            client = await self._get_client()
-            response_text = await self._call_claude(client, user_prompt)
+            if self._client is not None:
+                response_text = await self._call_anthropic(self._client, user_prompt)
+            elif self._backend == "bedrock":
+                response_text = await self._call_bedrock(user_prompt)
+            else:
+                client = await self._get_anthropic_client()
+                response_text = await self._call_anthropic(client, user_prompt)
         except Exception as e:
-            log.warning("advisor.api_failed", error=str(e))
+            log.warning("advisor.api_failed", backend=self._backend, error=str(e))
             return _neutral_fallback(default_letter, model, f"API error: {e}")
 
         # Parse response
@@ -181,7 +209,7 @@ class ClaudeAdvisor:
 
     # ----------------- Internal -----------------
 
-    async def _get_client(self):
+    async def _get_anthropic_client(self):
         if self._client is not None:
             return self._client
         # Lazy import to avoid hard dependency in tests
@@ -192,20 +220,62 @@ class ClaudeAdvisor:
         )
         return self._client
 
-    async def _call_claude(self, client, user_prompt: str) -> str:
-        """Make the actual API call. Returns the text content."""
+    async def _call_anthropic(self, client, user_prompt: str) -> str:
+        """Direct Anthropic API call. Returns the text content."""
         resp = await client.messages.create(
             model=self._settings.anthropic_model,
             max_tokens=self._max_tokens,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_prompt}],
         )
-        # Anthropic SDK returns content as list of blocks; pull the text
         text_parts = []
         for block in resp.content:
             if hasattr(block, "text"):
                 text_parts.append(block.text)
         return "".join(text_parts).strip()
+
+    async def _call_bedrock(self, user_prompt: str) -> str:
+        """
+        AWS Bedrock invoke_model call. Uses asyncio.to_thread to keep the event
+        loop free since boto3 is sync.
+
+        Bedrock's Anthropic models accept the same Messages API format as the
+        direct API, just wrapped under invoke_model body with an anthropic_version
+        marker. Response shape is also nearly identical.
+        """
+        body_dict = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": self._max_tokens,
+            "system": SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_prompt}],
+        }
+
+        def _invoke_sync() -> str:
+            import boto3  # lazy import — only required when Bedrock is the backend
+
+            if self._bedrock_client is None:
+                self._bedrock_client = boto3.client(
+                    "bedrock-runtime",
+                    region_name=self._settings.aws_region,
+                )
+            resp = self._bedrock_client.invoke_model(
+                modelId=self._settings.bedrock_model_id,
+                body=json.dumps(body_dict),
+                accept="application/json",
+                contentType="application/json",
+            )
+            payload = json.loads(resp["body"].read())
+            # Anthropic-on-Bedrock returns {"content": [{"type":"text","text":"..."}], ...}
+            parts = [
+                b.get("text", "")
+                for b in payload.get("content", [])
+                if b.get("type") == "text"
+            ]
+            return "".join(parts).strip()
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(_invoke_sync), timeout=self._timeout_sec
+        )
 
     def _parse_response(
         self, raw_text: str, default_letter: str, model: str

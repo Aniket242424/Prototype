@@ -279,3 +279,227 @@ async def test_advisor_disabled_when_no_api_key():
     )
     assert decision.advisor_score == 1.0  # pass-through fallback
     assert "disabled" in decision.rationale.lower()
+
+
+# ============================================================
+# Bedrock backend tests
+# These mock boto3 so no real AWS calls are made.
+# ============================================================
+
+def _bedrock_settings(model_id: str = "anthropic.claude-haiku-4-5-20251001-v1:0"):
+    """Build an AppSettings with advisor_backend=bedrock."""
+    from trading_agent.core.config import get_settings
+    s = get_settings()
+    # Pydantic Settings are frozen-ish; create a shallow copy with field overrides.
+    return s.model_copy(update={
+        "advisor_backend": "bedrock",
+        "bedrock_model_id": model_id,
+        "aws_region": "ap-south-1",
+    })
+
+
+def _mock_bedrock_response_body(text: str):
+    """
+    Construct a mock boto3 invoke_model response payload.
+
+    Real Bedrock returns: {"body": <StreamingBody>, "contentType": "...", ...}
+    where body.read() yields bytes of:
+      {"content": [{"type":"text","text":"..."}], "id":"...", ...}
+    """
+    import json as _json
+    body_obj = MagicMock()
+    body_obj.read = MagicMock(return_value=_json.dumps({
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+    }).encode("utf-8"))
+    return {"body": body_obj, "contentType": "application/json"}
+
+
+def _install_bedrock_mock(monkeypatch, response_text: str | None = None,
+                          raise_exc: Exception | None = None):
+    """Patch boto3.client so that invoke_model returns our fake response (or raises)."""
+    mock_client = MagicMock()
+    if raise_exc is not None:
+        mock_client.invoke_model = MagicMock(side_effect=raise_exc)
+    else:
+        mock_client.invoke_model = MagicMock(
+            return_value=_mock_bedrock_response_body(response_text or "")
+        )
+
+    boto3_mock = MagicMock()
+    boto3_mock.client = MagicMock(return_value=mock_client)
+
+    import sys
+    monkeypatch.setitem(sys.modules, "boto3", boto3_mock)
+    return mock_client, boto3_mock
+
+
+async def test_bedrock_backend_parses_valid_response(monkeypatch):
+    """Bedrock backend: valid JSON in response → AdvisorDecision populated."""
+    mock_client, _ = _install_bedrock_mock(monkeypatch, response_text=(
+        '{"decision": "CALL", "confidence": 0.72, "advisor_score": 0.68, '
+        '"rationale": "Trend looks clean", "warnings": []}'
+    ))
+    advisor = ClaudeAdvisor(settings=_bedrock_settings())
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.decision == "CALL"
+    assert decision.advisor_score == 0.68
+    assert decision.confidence == 0.72
+    assert decision.vetoes_trade is False
+    # invoke_model should have been called exactly once
+    assert mock_client.invoke_model.call_count == 1
+
+
+async def test_bedrock_backend_uses_configured_model_id(monkeypatch):
+    """The bedrock_model_id from settings is passed to invoke_model.modelId."""
+    custom_model = "anthropic.claude-sonnet-4-6-20250929-v1:0"
+    mock_client, _ = _install_bedrock_mock(monkeypatch, response_text=(
+        '{"decision": "PUT", "confidence": 0.6, "advisor_score": 0.6, '
+        '"rationale": "Bearish", "warnings": []}'
+    ))
+    advisor = ClaudeAdvisor(settings=_bedrock_settings(model_id=custom_model))
+    await advisor.evaluate(_signal(), _regime(), _intel(), _indicators(), _opportunity())
+
+    kwargs = mock_client.invoke_model.call_args.kwargs
+    assert kwargs["modelId"] == custom_model
+    assert kwargs["accept"] == "application/json"
+    assert kwargs["contentType"] == "application/json"
+
+
+async def test_bedrock_backend_sends_correct_body_shape(monkeypatch):
+    """Body must include anthropic_version, system, messages — Bedrock's required schema."""
+    import json as _json
+    mock_client, _ = _install_bedrock_mock(monkeypatch, response_text=(
+        '{"decision": "CALL", "confidence": 0.7, "advisor_score": 0.7, '
+        '"rationale": "ok", "warnings": []}'
+    ))
+    advisor = ClaudeAdvisor(settings=_bedrock_settings())
+    await advisor.evaluate(_signal(), _regime(), _intel(), _indicators(), _opportunity())
+
+    body_str = mock_client.invoke_model.call_args.kwargs["body"]
+    body = _json.loads(body_str)
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert isinstance(body["max_tokens"], int) and body["max_tokens"] > 0
+    assert isinstance(body["system"], str) and "VETO-ONLY" in body["system"]
+    assert body["messages"][0]["role"] == "user"
+    assert "NIFTY" in body["messages"][0]["content"]
+
+
+async def test_bedrock_falls_back_on_boto3_exception(monkeypatch):
+    """Bedrock invoke_model raises → neutral fallback (no exception propagates)."""
+    _install_bedrock_mock(monkeypatch, raise_exc=RuntimeError("AccessDeniedException: no Bedrock perms"))
+    advisor = ClaudeAdvisor(settings=_bedrock_settings())
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.advisor_score == 1.0  # pass-through neutral
+    assert decision.vetoes_trade is False
+    assert "API error" in decision.rationale
+
+
+async def test_bedrock_falls_back_on_invalid_json(monkeypatch):
+    """Bedrock returns non-JSON text → neutral fallback (same path as Anthropic backend)."""
+    _install_bedrock_mock(monkeypatch, response_text="Sure, this is a good trade!")
+    advisor = ClaudeAdvisor(settings=_bedrock_settings())
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.advisor_score == 1.0
+    assert "fallback" in decision.rationale.lower()
+
+
+async def test_bedrock_handles_code_fenced_json(monkeypatch):
+    """Some models wrap JSON in ```json ... ``` — must still parse on Bedrock path."""
+    fenced = (
+        "```json\n"
+        '{"decision": "CALL", "confidence": 0.8, "advisor_score": 0.75, '
+        '"rationale": "fenced response", "warnings": []}\n'
+        "```"
+    )
+    _install_bedrock_mock(monkeypatch, response_text=fenced)
+    advisor = ClaudeAdvisor(settings=_bedrock_settings())
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.decision == "CALL"
+    assert decision.advisor_score == 0.75
+
+
+async def test_bedrock_model_id_recorded_in_decision(monkeypatch):
+    """AdvisorDecision.model audit field should reflect the Bedrock model used."""
+    custom_model = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    _install_bedrock_mock(monkeypatch, response_text=(
+        '{"decision": "CALL", "confidence": 0.7, "advisor_score": 0.7, '
+        '"rationale": "ok", "warnings": []}'
+    ))
+    advisor = ClaudeAdvisor(settings=_bedrock_settings(model_id=custom_model))
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.model == custom_model
+
+
+async def test_bedrock_client_reused_across_calls(monkeypatch):
+    """boto3.client('bedrock-runtime') must be created once and reused (not per-call)."""
+    mock_client, boto3_mock = _install_bedrock_mock(monkeypatch, response_text=(
+        '{"decision": "CALL", "confidence": 0.7, "advisor_score": 0.7, '
+        '"rationale": "ok", "warnings": []}'
+    ))
+    advisor = ClaudeAdvisor(settings=_bedrock_settings())
+    await advisor.evaluate(_signal(), _regime(), _intel(), _indicators(), _opportunity())
+    await advisor.evaluate(_signal(), _regime(), _intel(), _indicators(), _opportunity())
+    # Two evaluations but only one boto3.client(...) construction
+    assert boto3_mock.client.call_count == 1
+    assert mock_client.invoke_model.call_count == 2
+
+
+async def test_mock_client_bypasses_bedrock_backend(monkeypatch):
+    """When client_override is set, the bedrock backend is bypassed (legacy tests work)."""
+    # Even with backend=bedrock, the mock Anthropic client should be used
+    boto3_mock = MagicMock()
+    boto3_mock.client = MagicMock(side_effect=AssertionError("boto3 must NOT be called"))
+    import sys
+    monkeypatch.setitem(sys.modules, "boto3", boto3_mock)
+
+    anthropic_response = (
+        '{"decision": "CALL", "confidence": 0.7, "advisor_score": 0.7, '
+        '"rationale": "via mock", "warnings": []}'
+    )
+    advisor = ClaudeAdvisor(
+        settings=_bedrock_settings(),
+        client_override=_mock_claude_client(anthropic_response),
+    )
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.decision == "CALL"
+    # boto3.client should NEVER have been touched
+    assert boto3_mock.client.call_count == 0
+
+
+async def test_anthropic_backend_default_still_works(monkeypatch):
+    """Sanity: default settings (advisor_backend='anthropic') still route through Anthropic SDK."""
+    from trading_agent.core.config import get_settings
+    s = get_settings()
+    assert s.advisor_backend == "anthropic"  # default
+
+    # boto3 must NOT be called under default backend
+    boto3_mock = MagicMock()
+    boto3_mock.client = MagicMock(side_effect=AssertionError("boto3 must NOT be called"))
+    import sys
+    monkeypatch.setitem(sys.modules, "boto3", boto3_mock)
+
+    advisor = ClaudeAdvisor(client_override=_mock_claude_client(
+        '{"decision": "CALL", "confidence": 0.7, "advisor_score": 0.7, '
+        '"rationale": "anthropic path", "warnings": []}'
+    ))
+    decision = await advisor.evaluate(
+        _signal(), _regime(), _intel(), _indicators(), _opportunity()
+    )
+    assert decision.decision == "CALL"
+    assert boto3_mock.client.call_count == 0

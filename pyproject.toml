@@ -32,7 +32,8 @@ dependencies = [
     "numpy>=1.26",
 
     # AI advisor
-    "anthropic>=0.34",
+    "anthropic>=0.34",                # used when advisor_backend=anthropic
+    "boto3>=1.34",                    # used when advisor_backend=bedrock (AWS Bedrock client)
 
     # Misc
     "pyyaml>=6.0",
