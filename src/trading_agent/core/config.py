@@ -61,11 +61,12 @@ class AppSettings(BaseSettings):
 
     # --- AWS Bedrock (only used when advisor_backend == "bedrock") ---
     aws_region: str = "ap-south-1"
-    # Default to Claude Haiku 4.5 cross-region inference profile (Asia-Pacific).
-    # The `apac.` prefix is required for Mumbai (ap-south-1) since the model is
-    # served via cross-region inference, not direct invocation. For US, use
-    # "us.anthropic.claude-haiku-4-5-20251001-v1:0".
-    bedrock_model_id: str = "apac.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Claude Haiku 4.5 on Bedrock is only invocable via inference profile, not
+    # the foundation model ID. As of 2026-05, the available profile for Haiku 4.5
+    # in Mumbai is `global.anthropic.claude-haiku-4-5-20251001-v1:0`.
+    # Verify available profiles in your account via:
+    #   aws bedrock list-inference-profiles --region ap-south-1
+    bedrock_model_id: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # --- Postgres ---
     postgres_host: str = "localhost"
