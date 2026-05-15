@@ -62,7 +62,7 @@ WEIGHTS = {
     "risk_reward_profile": 0.06,
 }
 
-EMIT_THRESHOLD = 0.55  # paper-mode calibration 2026-05-13 (was 0.65, heuristic). Phase 5 backtest will recalibrate.
+EMIT_THRESHOLD = 0.40  # paper-mode calibration 2026-05-15 (was 0.55, was 0.65). Lowered to exercise the full pipeline; risk engine + AI advisor + strategy filters still gate every trade. Phase 5 backtest will recalibrate properly.
 
 
 def _clamp01(x: float) -> float:
