@@ -13,6 +13,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +21,8 @@ from fastapi import FastAPI
 from trading_agent.api.routers import auth, control, dashboard, health
 from trading_agent.core.config import get_settings
 from trading_agent.core.logging import configure_logging, get_logger
+from trading_agent.monitoring.telegram_alerter import alert as telegram_alert
+from trading_agent.monitoring.token_watcher import token_watcher_loop
 from trading_agent.supervisor import get_supervisor
 
 configure_logging()
@@ -40,10 +43,32 @@ async def lifespan(app: FastAPI):
     sup = get_supervisor()
     result = sup.start_all()
     log.info("supervisor.auto_started", result=result)
+
+    # Background monitoring task: watches Upstox token expiry, alerts via Telegram
+    # when re-auth is needed. No-op if Telegram is not configured.
+    token_watcher_task = asyncio.create_task(token_watcher_loop())
+    log.info("token_watcher.spawned")
+
+    # Boot-time Telegram heartbeat so operator sees the bot is alive after deploys
+    await telegram_alert(
+        "info",
+        f"<b>🚀 Trading_Agent online</b>\n"
+        f"env=<code>{settings.app_env}</code> | "
+        f"capital=₹{int(settings.trading_capital_inr):,} | "
+        f"live_trading=<code>{settings.live_trading}</code>",
+        dedup_key="boot",
+        silent=True,
+    )
+
     try:
         yield
     finally:
         log.info("app.stopping")
+        token_watcher_task.cancel()
+        try:
+            await token_watcher_task
+        except asyncio.CancelledError:
+            pass
         sup.stop_all()
 
 
