@@ -139,6 +139,86 @@
     z-index: 1000;
     transition: opacity 0.3s;
   }
+
+  /* ---------- Metrics strip (prominent top stats) ---------- */
+  .metrics-strip {
+    padding: 14px 24px;
+    background: linear-gradient(90deg, #161b22, #1a2030);
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+  }
+  .metric-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .metric-label {
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .metric-value {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .metric-value.positive { color: var(--green); }
+  .metric-value.negative { color: var(--red); }
+  .metric-value.neutral { color: var(--muted); }
+  .metric-sub {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  /* ---------- Tab navigation ---------- */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .tab {
+    padding: 12px 20px;
+    cursor: pointer;
+    color: var(--muted);
+    border: none;
+    background: transparent;
+    border-bottom: 2px solid transparent;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .tab-count {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .tab-content { display: none; }
+  .tab-content.active { display: grid; }
 </style>
 </head>
 <body>
@@ -147,12 +227,44 @@
   <div class="meta">
     <span id="ist-now">--</span>
     &nbsp;|&nbsp; market <span id="market-status">--</span>
-    &nbsp;|&nbsp; capital <span id="capital">--</span>
     &nbsp;|&nbsp; <span id="last-update">--</span>
   </div>
 </header>
 
-<main id="main">
+<!-- Prominent metrics strip — always visible across all tabs -->
+<section class="metrics-strip">
+  <div class="metric-card">
+    <span class="metric-label">💰 Capital</span>
+    <span class="metric-value" id="m-capital">--</span>
+    <span class="metric-sub" id="m-capital-sub">paper</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">💵 PnL Today (Closed)</span>
+    <span class="metric-value" id="m-pnl-today">--</span>
+    <span class="metric-sub" id="m-pnl-today-sub">no trades closed</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">📊 Open Positions</span>
+    <span class="metric-value" id="m-open-count">--</span>
+    <span class="metric-sub" id="m-open-sub">flat</span>
+  </div>
+  <div class="metric-card">
+    <span class="metric-label">🪙 Upstox Token</span>
+    <span class="metric-value" id="m-token">--</span>
+    <span class="metric-sub" id="m-token-sub">--</span>
+  </div>
+</section>
+
+<!-- Tab navigation -->
+<nav class="tabs">
+  <button class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+  <button class="tab" data-tab="positions" onclick="switchTab('positions')">
+    Positions<span class="tab-count" id="t-positions-count">0</span>
+  </button>
+  <button class="tab" data-tab="activity" onclick="switchTab('activity')">Activity Log</button>
+</nav>
+
+<main id="main" class="tab-content active" data-tab="overview">
   <div class="panel full">
     <h2>System Control</h2>
     <div id="workers-rows"></div>
@@ -255,6 +367,49 @@
     <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
   </div>
 
+  <div class="panel full">
+    <h2>Phase progress</h2>
+    <div class="phase-list" id="phase-list"></div>
+  </div>
+</main>
+
+<!-- ============================================================ -->
+<!-- POSITIONS TAB                                                 -->
+<!-- ============================================================ -->
+<main class="tab-content" data-tab="positions">
+  <div class="panel">
+    <h2>Open positions — summary</h2>
+    <div id="positions-summary"></div>
+  </div>
+
+  <div class="panel">
+    <h2>AI advisor — today</h2>
+    <div id="advisor-summary"></div>
+  </div>
+
+  <div class="panel full">
+    <h2>Open positions — detail</h2>
+    <table id="positions-detail-table">
+      <thead><tr>
+        <th>ID</th>
+        <th>Underlying</th>
+        <th>Direction</th>
+        <th class="num">Qty</th>
+        <th class="num">Entry premium</th>
+        <th class="num">Initial stop</th>
+        <th class="num">Target</th>
+        <th>Mode</th>
+        <th>Opened</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</main>
+
+<!-- ============================================================ -->
+<!-- ACTIVITY LOG TAB                                              -->
+<!-- ============================================================ -->
+<main class="tab-content" data-tab="activity">
   <div class="panel">
     <h2>Risk Engine — today</h2>
     <div id="risk-summary"></div>
@@ -280,16 +435,6 @@
     </table>
   </div>
 
-  <div class="panel">
-    <h2>AI advisor — today</h2>
-    <div id="advisor-summary"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Open positions</h2>
-    <div id="positions-summary"></div>
-  </div>
-
   <div class="panel full">
     <h2>Recent AI advisor decisions</h2>
     <table id="advisor-recent-table">
@@ -300,24 +445,6 @@
         <th class="num">Confidence</th>
         <th>Rationale</th>
         <th>Model</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div class="panel full">
-    <h2>Open positions detail</h2>
-    <table id="positions-detail-table">
-      <thead><tr>
-        <th>ID</th>
-        <th>Underlying</th>
-        <th>Direction</th>
-        <th class="num">Qty</th>
-        <th class="num">Entry premium</th>
-        <th class="num">Initial stop</th>
-        <th class="num">Target</th>
-        <th>Mode</th>
-        <th>Opened</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -339,11 +466,6 @@
       </tr></thead>
       <tbody></tbody>
     </table>
-  </div>
-
-  <div class="panel full">
-    <h2>Phase progress</h2>
-    <div class="phase-list" id="phase-list"></div>
   </div>
 </main>
 
@@ -388,6 +510,30 @@ function badge(cls, text) { return `<span class="badge ${cls}">${text}</span>`; 
 function row(label, valueHtml) {
   return `<div class="row"><span class="label">${label}</span><span class="value">${valueHtml}</span></div>`;
 }
+
+// ---------- Tab switching ----------
+function switchTab(name) {
+  // Update tab button states
+  document.querySelectorAll(".tab").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.tab === name);
+  });
+  // Update tab content visibility
+  document.querySelectorAll(".tab-content").forEach(main => {
+    main.classList.toggle("active", main.dataset.tab === name);
+  });
+  // Remember choice for next visit
+  try { localStorage.setItem("dashboard_active_tab", name); } catch {}
+}
+
+// Restore last-active tab on page load
+(function restoreActiveTab() {
+  try {
+    const saved = localStorage.getItem("dashboard_active_tab");
+    if (saved && ["overview", "positions", "activity"].includes(saved)) {
+      switchTab(saved);
+    }
+  } catch {}
+})();
 
 async function refresh() {
   try {
@@ -484,7 +630,54 @@ function render(d) {
   $("market-status").innerHTML = d.system.market_open
     ? badge("b-green", "OPEN")
     : badge("b-grey", "CLOSED");
-  $("capital").textContent = "₹" + fmtInt(d.system.trading_capital_inr);
+
+  // ---------- Metrics strip (always visible across tabs) ----------
+  // Capital
+  $("m-capital").textContent = "₹" + fmtInt(d.system.trading_capital_inr);
+  $("m-capital-sub").textContent = d.live_trading && d.live_trading.authorized
+    ? "LIVE mode" : "paper mode (gated)";
+
+  // PnL today (closed positions only)
+  const closedToday = (d.positions && d.positions.closed_today) || [];
+  const pnlToday = closedToday.reduce((a, p) => a + (p.pnl_inr || 0), 0);
+  const pnlEl = $("m-pnl-today");
+  const pnlSubEl = $("m-pnl-today-sub");
+  if (closedToday.length === 0) {
+    pnlEl.textContent = "₹0";
+    pnlEl.className = "metric-value neutral";
+    pnlSubEl.textContent = "no trades closed today";
+  } else {
+    const sign = pnlToday >= 0 ? "+" : "";
+    pnlEl.textContent = sign + "₹" + fmtInt(Math.round(pnlToday));
+    pnlEl.className = pnlToday > 0 ? "metric-value positive"
+                    : pnlToday < 0 ? "metric-value negative"
+                    : "metric-value neutral";
+    const wins = closedToday.filter(p => (p.pnl_inr || 0) > 0).length;
+    pnlSubEl.textContent = `${closedToday.length} closed · ${wins} win${wins === 1 ? "" : "s"}`;
+  }
+
+  // Open positions count
+  const openCount = (d.positions && d.positions.open_count) || 0;
+  $("m-open-count").textContent = openCount;
+  $("m-open-sub").textContent = openCount === 0 ? "flat" : `${openCount} active`;
+  $("t-positions-count").textContent = openCount;
+
+  // Token status
+  const tokenEl = $("m-token");
+  const tokenSubEl = $("m-token-sub");
+  if (!d.auth || !d.auth.present) {
+    tokenEl.textContent = "MISSING";
+    tokenEl.className = "metric-value negative";
+    tokenSubEl.textContent = "run upstox auth";
+  } else if (!d.auth.valid) {
+    tokenEl.textContent = "EXPIRED";
+    tokenEl.className = "metric-value negative";
+    tokenSubEl.textContent = "re-auth required";
+  } else {
+    tokenEl.textContent = "VALID";
+    tokenEl.className = "metric-value positive";
+    tokenSubEl.textContent = "expires " + fmtCountdown(d.auth.seconds_to_expiry);
+  }
 
   // Infra
   const i = d.infra;
