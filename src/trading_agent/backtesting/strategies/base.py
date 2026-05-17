@@ -54,3 +54,17 @@ class BacktestStrategy(Protocol):
           EntryDecision if entering, None to skip.
         """
         ...
+
+    # ---- Optional hooks (provide no-op defaults if your strategy doesn't need them) ----
+
+    def on_session_start(self, session_date) -> None:
+        """Called once at the first bar of each new trading day. Reset per-day state here."""
+        ...
+
+    def on_bar(self, bar: Bar) -> None:
+        """
+        Called for EVERY bar in chronological order (regardless of entry window).
+        Strategies that maintain session-wide state (VWAP, day-high/low, morning
+        trend, etc.) can update it here.
+        """
+        ...

@@ -57,6 +57,14 @@ class EmaCrossoverStrategy:
     def is_force_exit_time(self, ts: datetime) -> bool:
         return ts.astimezone(IST).time() >= self.force_exit_time
 
+    def on_session_start(self, session_date) -> None:
+        """No per-day state to reset."""
+        pass
+
+    def on_bar(self, bar: Bar) -> None:
+        """No per-bar state updates needed (uses sliding history only)."""
+        pass
+
     def should_open(self, bar: Bar, history: list[Bar]) -> Optional[EntryDecision]:
         if len(history) < self.min_history_bars:
             return None

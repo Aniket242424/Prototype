@@ -28,6 +28,7 @@ from typing import Optional
 from trading_agent.backtesting.dtos import Bar, BacktestResults, BacktestTrade
 from trading_agent.backtesting.strategies.base import BacktestStrategy, EntryDecision
 from trading_agent.backtesting.strategies.ema_crossover import EmaCrossoverStrategy
+from trading_agent.backtesting.transaction_costs import ZERO_COST, TransactionCostModel
 from trading_agent.core.logging import get_logger
 from trading_agent.core.time_utils import IST
 
@@ -71,6 +72,7 @@ class BacktestEngine:
         self,
         underlying: str,
         strategy: Optional[BacktestStrategy] = None,
+        costs: Optional[TransactionCostModel] = None,
         # ---- V1-style convenience params (used only when strategy=None) ----
         stop_pct: float = 0.0035,
         target_rr: float = 2.0,
@@ -89,6 +91,9 @@ class BacktestEngine:
                 min_history_bars=min_history_bars,
             )
         self.strategy: BacktestStrategy = strategy
+        # Default to ZERO_COST so legacy tests (which assumed no fees) still pass.
+        # Real backtests should pass a realistic TransactionCostModel.
+        self.costs: TransactionCostModel = costs if costs is not None else ZERO_COST
 
         # Keep these as attributes for tests that introspect them
         self.stop_pct = Decimal(str(stop_pct))
@@ -183,7 +188,11 @@ class BacktestEngine:
             pnl_pts = exit_price - pos.entry_price
         else:
             pnl_pts = pos.entry_price - exit_price
-        r = float(pnl_pts / pos.initial_r) if pos.initial_r > 0 else 0.0
+        # Deduct round-trip transaction cost (spread + brokerage + STT + GST)
+        # expressed in underlying points so it directly subtracts from pnl_pts.
+        cost_pts = Decimal(str(self.costs.cost_in_underlying_pts()))
+        pnl_pts_after_costs = pnl_pts - cost_pts
+        r = float(pnl_pts_after_costs / pos.initial_r) if pos.initial_r > 0 else 0.0
         hold_min = int((bar.ts - pos.entry_ts).total_seconds() // 60)
         self._trades.append(BacktestTrade(
             underlying=pos.underlying,
@@ -210,16 +219,28 @@ class BacktestEngine:
         if not bars:
             return self._empty_results()
 
+        current_session = None
         for bar in bars:
+            bar_date = bar.ts.astimezone(IST).date()
+            if bar_date != current_session:
+                # New trading day — reset per-day state
+                self.strategy.on_session_start(bar_date)
+                current_session = bar_date
+
             # Exit checks first (so a bar can't open AND stop-out in the same bar)
             self._check_exits(bar)
-            # Append to history (strategy.should_open sees history WITHOUT current bar)
-            # Note: strategy.should_open includes the current bar via its own logic
+
+            # Let the strategy update its session state for this bar (VWAP, day high/low, etc.)
+            self.strategy.on_bar(bar)
+
+            # Update legacy state buffers (kept for tests that introspect them)
             self._closes.append(bar.close)
             self._highs.append(bar.high)
             self._lows.append(bar.low)
+
             # Try entry on this bar
             self._try_open(bar)
+
             # Add to history AFTER entry attempt (so next iter sees this bar)
             self._history.append(bar)
 

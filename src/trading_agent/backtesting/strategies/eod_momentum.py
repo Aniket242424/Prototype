@@ -54,6 +54,9 @@ from trading_agent.core.time_utils import IST
 
 
 # Strategy-tunable knobs (kept here so calibration loops can sweep them)
+# Window optimization (2026-05-17): tested wider 14:30-15:15 — RESULT was WORSE
+# (45.6% win vs 53.4% on narrow). Reverted to narrow window which captures the
+# true end-of-day momentum edge.
 ENTRY_WINDOW_START = time(14, 45)
 ENTRY_WINDOW_END = time(15, 10)
 FORCE_EXIT_TIME = time(15, 25)
@@ -89,6 +92,14 @@ class EndOfDayMomentumStrategy:
         return ist >= FORCE_EXIT_TIME
 
     # ---------------------- Entry logic ----------------------
+
+    def on_session_start(self, session_date) -> None:
+        """No per-day state to reset."""
+        pass
+
+    def on_bar(self, bar: Bar) -> None:
+        """No per-bar state updates."""
+        pass
 
     def should_open(self, bar: Bar, history: list[Bar]) -> Optional[EntryDecision]:
         # Need enough history for indicators
