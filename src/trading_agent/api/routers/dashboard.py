@@ -607,8 +607,10 @@ async def dashboard_status() -> dict[str, Any]:
                 "phase_4_4_position_manager": "completed",
                 "phase_4_5_ai_advisor": "completed",
                 "phase_4_6_worker_orchestrator": "completed",
-                "phase_5_backtesting": "pending",
-                "phase_6_monitoring_and_learning": "pending",
+                "phase_5_backtesting": "completed",
+                "phase_6_1_telegram_alerter_and_watcher": "completed",
+                "phase_6_2_telegram_token_refresh": "completed",
+                "phase_7_monitoring_and_learning": "pending",
             },
         }
     finally:

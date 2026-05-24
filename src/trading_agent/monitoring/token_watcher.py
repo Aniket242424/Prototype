@@ -16,7 +16,6 @@ Design:
 from __future__ import annotations
 
 import asyncio
-import urllib.parse
 
 from sqlalchemy import select
 
@@ -29,16 +28,19 @@ from trading_agent.monitoring.telegram_alerter import alert
 
 log = get_logger(__name__)
 
+UPSTOX_APPS_URL = "https://account.upstox.com/developer/apps"
 
-# Re-auth URL template. Operator taps the URL → browser opens Upstox →
-# logs in → redirect captures the token automatically.
-def _build_authorize_url(settings: AppSettings) -> str:
-    params = {
-        "client_id": settings.upstox_api_key.get_secret_value(),
-        "redirect_uri": settings.upstox_redirect_uri,
-        "response_type": "code",
-    }
-    return f"{settings.upstox_base_url}/login/authorization/dialog?{urllib.parse.urlencode(params)}"
+
+# Operator picks up Telegram → taps URL → on Upstox dashboard taps the
+# "Generate" button → copies the JWT → pastes back to the bot as `/token <jwt>`.
+# The Phase 6.2 Telegram listener handles validation + DB persistence.
+def _reauth_instructions() -> str:
+    return (
+        f'1. Open <a href="{UPSTOX_APPS_URL}">Upstox apps</a>\n'
+        "2. Tap <b>Generate</b> next to <i>Access Token</i>\n"
+        "3. Reply here: <code>/token &lt;paste-jwt&gt;</code>\n"
+        "Bot will validate + persist it (~5 seconds)."
+    )
 
 
 # ============================================================
@@ -114,7 +116,7 @@ async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
             )
         ).scalar_one_or_none()
 
-    auth_url = _build_authorize_url(settings)
+    instructions = _reauth_instructions()
     today_key = now_ist().date().isoformat()  # dedup key: one alert per day per kind
 
     if row is None:
@@ -123,22 +125,20 @@ async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
             "token_expiry",
             (
                 "<b>⚠️ Upstox: No token stored</b>\n"
-                "The bot has never authenticated. Click to authorize:\n\n"
-                f'<a href="{auth_url}">Authorize Upstox</a>'
+                "The bot has never authenticated.\n\n" + instructions
             ),
             dedup_key=f"no_token_{today_key}",
         )
         return
 
     if not _is_valid(row.issued_at):
-        # Token expired — alert with re-auth URL
+        # Token expired — instruct via /token command
         await alert(
             "token_expiry",
             (
                 "<b>🔄 Upstox token expired — re-auth required</b>\n"
-                f"Last token issued at <code>{row.issued_at.isoformat()}</code>\n\n"
-                f'<a href="{auth_url}">Tap here to re-auth</a> (takes 30 seconds)\n\n'
-                "Bot is paused on market data until you re-auth."
+                f"Last token issued at <code>{row.issued_at.isoformat()}</code>\n"
+                "Bot is paused on market data until you re-auth.\n\n" + instructions
             ),
             dedup_key=f"expired_{today_key}",
         )
@@ -153,8 +153,7 @@ async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
             (
                 "<b>⏰ Upstox token expiring soon</b>\n"
                 f"Token expires in <b>{minutes_left} minutes</b> at 03:30 IST.\n\n"
-                f'<a href="{auth_url}">Tap to re-auth now</a> '
-                "to avoid a gap in market data."
+                + instructions
             ),
             dedup_key=f"warning_{today_key}",
             silent=True,  # low-urgency, don't buzz the phone in the middle of the night
