@@ -325,6 +325,16 @@ async def set_agent_budget(payload: BudgetPayload):
     }
 
 
+@router.delete("/agent_budgets/{agent_name}")
+async def delete_agent_budget(agent_name: str):
+    """Remove an agent's budget (the agent reverts to unlimited mode)."""
+    from trading_agent.ai.budget import delete_budget
+    deleted = await delete_budget(agent_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No budget found for agent '{agent_name}'")
+    return {"ok": True, "deleted": agent_name}
+
+
 @router.post("/agent_budgets/{agent_name}/refill")
 async def refill_agent_budget(agent_name: str):
     """Reset consumed counter to zero without changing allowance."""

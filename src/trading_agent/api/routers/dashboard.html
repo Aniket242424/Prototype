@@ -291,6 +291,31 @@
     <div id="llm-usage" class="small">—</div>
   </div>
 
+  <!-- AGENT BUDGETS — promoted from Diagnostics for visibility -->
+  <div class="panel full">
+    <h2>💰 Agent token budgets</h2>
+    <div class="small" style="color:var(--muted); margin-bottom:8px">
+      Per-agent LLM token allowance. Agent stops calling Claude when its budget is exhausted; click <b>Refill</b> to reset.
+    </div>
+    <div id="agent-budgets-table"></div>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border)">
+      <div class="small" style="color:var(--muted); margin-bottom:6px">Add or update a budget:</div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+        <input id="bud-name" type="text" placeholder="agent_name (e.g. premarket_briefing)"
+               style="flex:2; min-width:180px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <input id="bud-allowance" type="number" placeholder="100000" min="0"
+               style="flex:1; min-width:100px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <input id="bud-notes" type="text" placeholder="notes (optional)"
+               style="flex:2; min-width:120px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <button class="btn btn-green" onclick="saveAgentBudget()">Save</button>
+        <span id="bud-status" class="small" style="color:var(--muted)"></span>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <!-- ============================================================ -->
@@ -413,31 +438,6 @@
       </thead>
       <tbody></tbody>
     </table>
-  </div>
-
-  <div class="panel full">
-    <h2>Agent token budgets</h2>
-    <div class="small" style="color:var(--muted); margin-bottom:8px">
-      Per-agent LLM token allowance. Agent stops calling Claude when its budget is exhausted.
-      Click <b>Refill</b> to reset the counter (allowance stays the same).
-    </div>
-    <div id="agent-budgets-table"></div>
-    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border)">
-      <div class="small" style="color:var(--muted); margin-bottom:6px">Set or update a budget:</div>
-      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
-        <input id="bud-name" type="text" placeholder="agent_name (e.g. premarket_briefing)"
-               style="flex:2; min-width:180px; padding:5px 8px; background:var(--bg); color:var(--text);
-                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
-        <input id="bud-allowance" type="number" placeholder="100000" min="0"
-               style="flex:1; min-width:100px; padding:5px 8px; background:var(--bg); color:var(--text);
-                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
-        <input id="bud-notes" type="text" placeholder="notes (optional)"
-               style="flex:2; min-width:120px; padding:5px 8px; background:var(--bg); color:var(--text);
-                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
-        <button class="btn btn-green" onclick="saveAgentBudget()">Save</button>
-        <span id="bud-status" class="small" style="color:var(--muted)"></span>
-      </div>
-    </div>
   </div>
 
   <div class="panel full">
@@ -722,6 +722,19 @@ async function refillAgentBudget(agentName) {
     setTimeout(refresh, 400);
   } catch (e) {
     toast("Refill failed: " + e.message, "var(--red)");
+  }
+}
+
+async function deleteAgentBudget(agentName) {
+  if (!confirm(`Delete budget for "${agentName}"? Agent will revert to UNLIMITED mode (no quota).`)) return;
+  try {
+    const r = await fetch(`/control/agent_budgets/${encodeURIComponent(agentName)}`, {method: "DELETE"});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    toast(`Deleted budget for ${agentName} ✓`, "var(--green)");
+    setTimeout(refresh, 400);
+  } catch (e) {
+    toast("Delete failed: " + e.message, "var(--red)");
   }
 }
 
@@ -1203,7 +1216,10 @@ function render(d) {
               </div>
             </td>
             <td>${statusBadge}</td>
-            <td><button class="btn" onclick="refillAgentBudget('${b.agent_name}')">Refill</button></td>
+            <td>
+              <button class="btn" onclick="refillAgentBudget('${b.agent_name}')">Refill</button>
+              <button class="btn btn-red" onclick="deleteAgentBudget('${b.agent_name}')">Delete</button>
+            </td>
           </tr>
         `;
       }).join("");

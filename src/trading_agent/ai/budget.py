@@ -141,6 +141,25 @@ async def set_budget(
     return b
 
 
+async def delete_budget(agent_name: str) -> bool:
+    """
+    Remove an agent's budget entirely (unlimited mode). Returns True if a
+    row was deleted, False if no budget existed for this agent.
+    """
+    from sqlalchemy import delete
+
+    async with session_scope() as session:
+        result = await session.execute(
+            delete(AgentTokenBudgetRow).where(
+                AgentTokenBudgetRow.agent_name == agent_name
+            )
+        )
+        await session.commit()
+        deleted = result.rowcount > 0
+    log.info("agent_budget.deleted", agent_name=agent_name, deleted=deleted)
+    return deleted
+
+
 async def refill_budget(agent_name: str) -> BudgetState:
     """
     Reset consumed counter to zero (sets refilled_at to now). Allowance
