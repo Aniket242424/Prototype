@@ -289,6 +289,27 @@
   <div class="panel">
     <h2>Authentication</h2>
     <div id="auth-rows"></div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer; color:var(--accent); font-size:11px; text-transform:uppercase; letter-spacing:0.5px">
+        Refresh Upstox token
+      </summary>
+      <div style="margin-top:8px">
+        <div class="small" style="color:var(--muted); margin-bottom:6px">
+          Paste the JWT from
+          <a href="https://account.upstox.com/developer/apps" target="_blank" style="color:var(--accent)">Upstox apps</a>
+          (tap "Generate" next to Access Token). Saved encrypted in DB.
+        </div>
+        <textarea id="upstox-jwt-input" rows="3"
+                  placeholder="eyJ0eXAiOiJKV1Qi..."
+                  style="width:100%; padding:6px 8px; background:var(--bg); color:var(--text);
+                         border:1px solid var(--border); border-radius:4px; font-family:inherit;
+                         font-size:11px; resize:vertical; box-sizing:border-box"></textarea>
+        <div style="margin-top:6px; display:flex; gap:8px; align-items:center">
+          <button class="btn btn-green" onclick="saveUpstoxToken()">Save token</button>
+          <span id="upstox-jwt-status" class="small" style="color:var(--muted)"></span>
+        </div>
+      </div>
+    </details>
   </div>
 
   <div class="panel">
@@ -604,6 +625,37 @@ async function ctrl(method, url, label) {
     setTimeout(refresh, 600);  // give the spawn/exit a moment
   } catch (e) {
     toast(label + " failed: " + e.message, "var(--red)");
+  }
+}
+
+async function saveUpstoxToken() {
+  const inputEl = document.getElementById("upstox-jwt-input");
+  const statusEl = document.getElementById("upstox-jwt-status");
+  const raw = (inputEl.value || "").trim();
+  if (!raw) {
+    statusEl.textContent = "Paste a JWT first.";
+    statusEl.style.color = "var(--amber)";
+    return;
+  }
+  statusEl.textContent = "Validating against Upstox…";
+  statusEl.style.color = "var(--muted)";
+  try {
+    const r = await fetch("/control/token", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({access_token: raw}),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    // Clear input (so token doesn't sit in DOM) and show success
+    inputEl.value = "";
+    statusEl.textContent = `✓ Saved for user ${body.user_id} (${body.user_name || "?"})`;
+    statusEl.style.color = "var(--green)";
+    toast("Upstox token saved ✓", "var(--green)");
+    setTimeout(refresh, 600);  // refresh dashboard so auth panel reflects new state
+  } catch (e) {
+    statusEl.textContent = "✗ " + e.message;
+    statusEl.style.color = "var(--red)";
   }
 }
 
