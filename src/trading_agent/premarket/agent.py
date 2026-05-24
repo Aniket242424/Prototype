@@ -22,9 +22,9 @@ import json
 from datetime import date, datetime
 from typing import Any
 
-from anthropic import AsyncAnthropic
 from pydantic import ValidationError
 
+from trading_agent.ai import get_llm_client, get_model_id
 from trading_agent.core.config import AppSettings, get_settings
 from trading_agent.core.logging import get_logger
 from trading_agent.core.time_utils import IST, now_ist
@@ -132,7 +132,8 @@ async def run_briefing_agent(
     settings = settings or get_settings()
     briefing_date = briefing_date or now_ist().date()
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
+    client = get_llm_client(settings)
+    model_id = get_model_id(settings)
 
     # Bootstrap user message — gives the agent a date anchor + task
     user_msg = (
@@ -150,7 +151,7 @@ async def run_briefing_agent(
     for turn in range(max_turns):
         log.info("premarket.agent.turn", turn=turn + 1, max_turns=max_turns)
         resp = await client.messages.create(
-            model=settings.anthropic_model,
+            model=model_id,
             max_tokens=max_tokens_per_turn,
             system=SYSTEM_PROMPT,
             tools=all_tool_definitions(),
