@@ -262,11 +262,43 @@
     Positions<span class="tab-count" id="t-positions-count">0</span>
   </button>
   <button class="tab" data-tab="activity" onclick="switchTab('activity')">Activity Log</button>
+  <button class="tab" data-tab="diagnostics" onclick="switchTab('diagnostics')">Diagnostics</button>
 </nav>
 
 <main id="main" class="tab-content active" data-tab="overview">
+
+  <!-- ACTION ITEMS — conditional, only rendered when needs attention -->
+  <div class="panel full" id="action-items-panel" style="display:none; border-color:var(--amber)">
+    <h2>⚠️ Needs your attention</h2>
+    <div id="action-items"></div>
+  </div>
+
+  <!-- TODAY'S PLAN — pre-market briefing -->
   <div class="panel full">
-    <h2>System Control</h2>
+    <h2>🌅 Today's plan</h2>
+    <div id="premarket-briefing" class="small">No briefing yet — agent runs daily at 08:30 IST.</div>
+  </div>
+
+  <!-- ACTIVE OPPORTUNITY — only matters when something is happening -->
+  <div class="panel full">
+    <h2>🎯 Active opportunity</h2>
+    <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
+  </div>
+
+  <!-- LLM USAGE — compact -->
+  <div class="panel full">
+    <h2>🤖 LLM usage (last 7 days)</h2>
+    <div id="llm-usage" class="small">—</div>
+  </div>
+
+</main>
+
+<!-- ============================================================ -->
+<!-- DIAGNOSTICS TAB — engineering / power-user view              -->
+<!-- ============================================================ -->
+<main class="tab-content" data-tab="diagnostics">
+  <div class="panel full">
+    <h2>System control</h2>
     <div id="workers-rows"></div>
     <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-green" onclick="ctrl('POST','/control/workers/start','Starting all workers')">Start All</button>
@@ -322,6 +354,21 @@
     <div id="ks-rows"></div>
   </div>
 
+  <div class="panel">
+    <h2>Trading state</h2>
+    <div id="trading-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>India VIX</h2>
+    <div id="vix-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Options chain — snapshots today</h2>
+    <div id="chain-rows"></div>
+  </div>
+
   <div class="panel full">
     <h2>Market data — per instrument</h2>
     <table id="instruments-table">
@@ -346,31 +393,6 @@
     </table>
   </div>
 
-  <div class="panel">
-    <h2>India VIX</h2>
-    <div id="vix-rows"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Options chain — snapshots today</h2>
-    <div id="chain-rows"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Trading state</h2>
-    <div id="trading-rows"></div>
-  </div>
-
-  <div class="panel full">
-    <h2>Pre-market briefing</h2>
-    <div id="premarket-briefing" class="small">No briefing available yet — agent runs daily at 08:30 IST.</div>
-  </div>
-
-  <div class="panel full">
-    <h2>LLM usage (last 7 days)</h2>
-    <div id="llm-usage" class="small">—</div>
-  </div>
-
   <div class="panel full">
     <h2>Regime & Opportunity (Phase 2)</h2>
     <div id="phase2-status" class="small" style="margin-bottom:8px;color:var(--muted)"></div>
@@ -391,11 +413,6 @@
       </thead>
       <tbody></tbody>
     </table>
-  </div>
-
-  <div class="panel full">
-    <h2>Active Opportunity</h2>
-    <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
   </div>
 
   <div class="panel full">
@@ -990,6 +1007,67 @@ function render(d) {
   }).join("");
   document.querySelector("#orders-recent-table tbody").innerHTML =
     orderRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No orders yet</td></tr>`;
+
+  // ---------- Action items (Overview tab) ----------
+  // Surfaces things that need operator attention so a new user doesn't have
+  // to scan all of Diagnostics to know what's wrong.
+  const actionItems = [];
+  const auth = d.trading || {};
+  // Token: stale / expired / missing
+  const tokenState = (d.trading && d.trading.upstox_token) || {};
+  if (tokenState.state === "EXPIRED" || tokenState.state === "MISSING") {
+    actionItems.push({
+      severity: "high",
+      msg: tokenState.state === "MISSING"
+        ? "Upstox token missing — bot can't connect to market data."
+        : "Upstox token expired — bot can't connect to market data.",
+      action: 'Switch to <b>Diagnostics</b> tab → <b>Authentication</b> → <b>Refresh Upstox token</b>',
+    });
+  }
+  // Worker stopped
+  const workersStatus = d.workers && d.workers.status;
+  if (workersStatus) {
+    Object.entries(workersStatus).forEach(([name, w]) => {
+      if (!w.running) {
+        actionItems.push({
+          severity: "high",
+          msg: `Worker "${name}" is stopped.`,
+          action: 'Switch to <b>Diagnostics</b> tab → <b>System control</b> → <b>Start All</b>',
+        });
+      }
+    });
+  }
+  // Kill switch tripped
+  if (d.kill_switch && d.kill_switch.tripped) {
+    actionItems.push({
+      severity: "high",
+      msg: "Kill switch is tripped — bot will not trade.",
+      action: 'Switch to <b>Diagnostics</b> tab → <b>Kill switch</b> → Reset',
+    });
+  }
+  // Skip-trading from briefing
+  if (d.premarket_briefing && d.premarket_briefing.available && d.premarket_briefing.skip_trading) {
+    actionItems.push({
+      severity: "med",
+      msg: "Pre-market agent recommends SKIP TRADING today (high uncertainty).",
+      action: "Review rationale in Today's plan below.",
+    });
+  }
+
+  const aiPanel = document.getElementById("action-items-panel");
+  const aiEl = document.getElementById("action-items");
+  if (actionItems.length === 0) {
+    aiPanel.style.display = "none";
+  } else {
+    aiPanel.style.display = "";
+    aiEl.innerHTML = actionItems.map(it => `
+      <div style="padding:6px 0; border-top:1px dashed var(--border)">
+        <span style="color:${it.severity === 'high' ? 'var(--red)' : 'var(--amber)'}; font-weight:600">●</span>
+        <span style="margin-left:6px">${it.msg}</span>
+        <div class="small" style="color:var(--muted); margin-left:18px; margin-top:2px">→ ${it.action}</div>
+      </div>
+    `).join("");
+  }
 
   // ---------- Pre-market briefing (compact) ----------
   const pm = d.premarket_briefing || { available: false };
