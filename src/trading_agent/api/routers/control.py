@@ -44,6 +44,10 @@ class BudgetPayload(BaseModel):
     agent_name: str
     allowance: int
     notes: str | None = None
+    # When True (default), refilled_at is set to now and the consumed
+    # counter effectively resets to zero. When False, only allowance and
+    # notes change — used by "Edit" to bump a quota without wiping usage.
+    reset_refill: bool = True
 
 
 @router.get("/kill-switch")
@@ -313,6 +317,7 @@ async def set_agent_budget(payload: BudgetPayload):
         agent_name=payload.agent_name.strip(),
         allowance=payload.allowance,
         notes=payload.notes,
+        reset_refill=payload.reset_refill,
     )
     return {
         "ok": True,

@@ -679,6 +679,23 @@ async function ctrl(method, url, label) {
   }
 }
 
+// Track when the form is in "edit" mode (preserves the consumed counter on save).
+// Cleared when a Save succeeds or the user types a different agent_name.
+let _budgetEditMode = false;
+
+function editAgentBudget(agentName, allowance) {
+  document.getElementById("bud-name").value = agentName;
+  document.getElementById("bud-allowance").value = allowance;
+  document.getElementById("bud-notes").value = "";
+  const statusEl = document.getElementById("bud-status");
+  statusEl.textContent = `Editing "${agentName}" — Save preserves the consumed counter.`;
+  statusEl.style.color = "var(--accent)";
+  _budgetEditMode = true;
+  // Scroll the form into view + focus allowance for quick adjust
+  document.getElementById("bud-allowance").focus();
+  document.getElementById("bud-allowance").select();
+}
+
 async function saveAgentBudget() {
   const nameEl = document.getElementById("bud-name");
   const allowanceEl = document.getElementById("bud-allowance");
@@ -693,19 +710,25 @@ async function saveAgentBudget() {
   if (isNaN(allowance) || allowance < 0) {
     statusEl.textContent = "allowance must be a non-negative integer"; statusEl.style.color = "var(--amber)"; return;
   }
-  statusEl.textContent = "Saving…"; statusEl.style.color = "var(--muted)";
+  // If editing, preserve consumed counter (reset_refill=false).
+  // If adding new, default behavior resets it.
+  const payload = {agent_name: name, allowance, notes, reset_refill: !_budgetEditMode};
+  statusEl.textContent = _budgetEditMode ? "Updating…" : "Saving…";
+  statusEl.style.color = "var(--muted)";
   try {
     const r = await fetch("/control/agent_budgets", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({agent_name: name, allowance, notes}),
+      body: JSON.stringify(payload),
     });
     const body = await r.json();
     if (!r.ok) throw new Error(body.detail || r.statusText);
     nameEl.value = ""; allowanceEl.value = ""; notesEl.value = "";
-    statusEl.textContent = `✓ Saved ${body.agent_name}: ${body.allowance.toLocaleString()} tokens`;
+    const action = _budgetEditMode ? "Updated" : "Saved";
+    statusEl.textContent = `✓ ${action} ${body.agent_name}: ${body.allowance.toLocaleString()} tokens`;
     statusEl.style.color = "var(--green)";
-    toast("Budget saved ✓", "var(--green)");
+    toast(`Budget ${action.toLowerCase()} ✓`, "var(--green)");
+    _budgetEditMode = false;
     setTimeout(refresh, 400);
   } catch (e) {
     statusEl.textContent = "✗ " + e.message; statusEl.style.color = "var(--red)";
@@ -1217,6 +1240,7 @@ function render(d) {
             </td>
             <td>${statusBadge}</td>
             <td>
+              <button class="btn" onclick="editAgentBudget('${b.agent_name}', ${b.allowance})">Edit</button>
               <button class="btn" onclick="refillAgentBudget('${b.agent_name}')">Refill</button>
               <button class="btn btn-red" onclick="deleteAgentBudget('${b.agent_name}')">Delete</button>
             </td>
