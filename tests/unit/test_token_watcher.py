@@ -36,15 +36,14 @@ def test_is_valid_for_token_issued_before_today_cutoff():
         assert token_watcher._is_valid(issued) is False
 
 
-# ----------------- _build_authorize_url -----------------
+# ----------------- _reauth_instructions -----------------
 
-def test_authorize_url_contains_client_id_and_redirect():
-    from trading_agent.core.config import get_settings
-    url = token_watcher._build_authorize_url(get_settings())
-    assert "client_id=" in url
-    assert "redirect_uri=" in url
-    assert "response_type=code" in url
-    assert url.startswith("https://")
+def test_reauth_instructions_points_to_token_command():
+    """Phase 6.2: alert body must instruct via /token, not the broken OAuth URL."""
+    msg = token_watcher._reauth_instructions()
+    assert "/token" in msg
+    assert "Generate" in msg
+    assert "upstox.com/developer/apps" in msg.lower()
 
 
 # ----------------- _check_once -----------------
@@ -84,7 +83,7 @@ async def test_alert_fires_when_no_token_in_db(_mock_session_context):
     args, kwargs = mock_alert.call_args
     assert args[0] == "token_expiry"
     assert "No token stored" in args[1]
-    assert "Authorize" in args[1]
+    assert "/token" in args[1]
     assert kwargs["dedup_key"].startswith("no_token_")
 
 
