@@ -1,0 +1,111 @@
+# Known high-impact events affecting Indian markets.
+# Updated when official schedules are published.
+# Schema: list of {date, event_type, title, impact, market_relevance, notes}
+#   date: YYYY-MM-DD
+#   event_type: rbi_policy | fomc | budget | nifty_expiry | banknifty_expiry |
+#               earnings | inflation_data | gdp_data | election | other
+#   impact: LOW | MEDIUM | HIGH | EXTREME
+#   market_relevance: free-text description of which market(s) affected
+
+events:
+  # ----- RBI Monetary Policy Committee meetings (2026) -----
+  # Official schedule: https://www.rbi.org.in/Scripts/AnnualPolicy.aspx
+  - date: 2026-02-07
+    event_type: rbi_policy
+    title: RBI MPC Policy Announcement
+    impact: HIGH
+    market_relevance: NIFTY_BANK lead, INR, bonds
+    notes: 10:00 IST announcement, 12:00 IST press conf
+
+  - date: 2026-04-09
+    event_type: rbi_policy
+    title: RBI MPC Policy Announcement
+    impact: HIGH
+    market_relevance: NIFTY_BANK lead, INR, bonds
+
+  - date: 2026-06-06
+    event_type: rbi_policy
+    title: RBI MPC Policy Announcement
+    impact: HIGH
+    market_relevance: NIFTY_BANK lead, INR, bonds
+
+  - date: 2026-08-08
+    event_type: rbi_policy
+    title: RBI MPC Policy Announcement
+    impact: HIGH
+    market_relevance: NIFTY_BANK lead, INR, bonds
+
+  - date: 2026-10-01
+    event_type: rbi_policy
+    title: RBI MPC Policy Announcement
+    impact: HIGH
+    market_relevance: NIFTY_BANK lead, INR, bonds
+
+  - date: 2026-12-05
+    event_type: rbi_policy
+    title: RBI MPC Policy Announcement
+    impact: HIGH
+    market_relevance: NIFTY_BANK lead, INR, bonds
+
+  # ----- US Federal Reserve FOMC (2026) -----
+  # Schedule: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+  # Announcement is 11:30 PM IST on day 2 of each meeting
+  - date: 2026-01-29
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-03-19
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-05-01
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-06-18
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-07-30
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-09-17
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-10-29
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  - date: 2026-12-10
+    event_type: fomc
+    title: US Federal Reserve FOMC Decision
+    impact: HIGH
+    market_relevance: GLOBAL — affects USD/INR, US futures, NIFTY gap
+
+  # ----- Union Budget 2026 (already happened) -----
+  - date: 2026-02-01
+    event_type: budget
+    title: Union Budget 2026-27
+    impact: EXTREME
+    market_relevance: All sectors; especially railways, defence, FMCG, banks
+
+# Notes:
+# - NIFTY/BANKNIFTY weekly expiries: dynamically derived in calendar.py
+#   (NIFTY Tue, BANKNIFTY discontinued Nov 2024)
+# - Earnings: keep stub here, populate dynamically when we add earnings API

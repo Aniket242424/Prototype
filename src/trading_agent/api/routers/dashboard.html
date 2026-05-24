@@ -341,6 +341,11 @@
   </div>
 
   <div class="panel full">
+    <h2>Pre-market briefing (Phase 7.1)</h2>
+    <div id="premarket-briefing" class="small">No briefing available yet — agent runs daily at 08:30 IST.</div>
+  </div>
+
+  <div class="panel full">
     <h2>Regime & Opportunity (Phase 2)</h2>
     <div id="phase2-status" class="small" style="margin-bottom:8px;color:var(--muted)"></div>
     <table id="phase2-table">
@@ -924,6 +929,42 @@ function render(d) {
   }).join("");
   document.querySelector("#orders-recent-table tbody").innerHTML =
     orderRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No orders yet</td></tr>`;
+
+  // ---------- Phase 7.1 pre-market briefing ----------
+  const pm = d.premarket_briefing || { available: false };
+  const pmEl = $("premarket-briefing");
+  if (!pm.available) {
+    pmEl.innerHTML = '<span style="color:var(--muted)">No briefing available yet — agent runs daily at 08:30 IST.</span>';
+  } else {
+    const sentColor = (s) => ({
+      STRONG_BULL: "b-green", BULL: "b-green",
+      NEUTRAL: "b-grey",
+      BEAR: "b-red", STRONG_BEAR: "b-red",
+    }[s] || "b-grey");
+    const impColor = (i) => ({
+      LOW: "b-green", MEDIUM: "b-amber", HIGH: "b-red", EXTREME: "b-red",
+    }[i] || "b-grey");
+    const skipBanner = pm.skip_trading
+      ? '<div style="color:var(--red);font-weight:600;margin-bottom:6px">⚠️ Agent recommends SKIP TRADING today</div>' : '';
+    const phasesHtml = Object.entries(pm.intraday_phases || {}).map(
+      ([k, v]) => `<span style="margin-right:10px"><code>${k}</code>→${badge(sentColor(v), v)}</span>`
+    ).join("");
+    pmEl.innerHTML = `
+      ${skipBanner}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:10px">
+        ${row("Date", `<span class="value">${pm.briefing_date}</span>`)}
+        ${row("Sentiment", `${badge(sentColor(pm.sentiment), pm.sentiment)} <span class="small">conv ${pm.conviction.toFixed(2)}</span>`)}
+        ${row("Impact", badge(impColor(pm.overall_impact), pm.overall_impact))}
+        ${row("Size mult", `<span class="value num">${pm.position_size_multiplier.toFixed(2)}×</span>`)}
+        ${row("NIFTY bias", badge(sentColor(pm.nifty_bias), pm.nifty_bias))}
+        ${row("BANKNIFTY bias", badge(sentColor(pm.banknifty_bias), pm.banknifty_bias))}
+      </div>
+      ${phasesHtml ? `<div style="margin-bottom:8px"><span class="label">Intraday phases:</span> ${phasesHtml}</div>` : ''}
+      ${pm.headlines_summary ? `<div style="margin-bottom:6px"><span class="label">Setup:</span> ${pm.headlines_summary}</div>` : ''}
+      <div style="margin-bottom:6px"><span class="label">Rationale:</span> ${pm.rationale}</div>
+      <div class="small" style="color:var(--muted)">tools=${(pm.tools_used||[]).join(",")} · tokens=${pm.tokens_used} · cost=₹${pm.cost_inr.toFixed(2)}</div>
+    `;
+  }
 
   // ---------- Phase 4 panels ----------
   const advisor = d.advisor || { calls_today: 0, vetoes_today: 0, recent: [] };

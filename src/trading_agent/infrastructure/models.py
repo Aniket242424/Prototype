@@ -314,6 +314,34 @@ class KillSwitchEventRow(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PremarketBriefingRow(Base):
+    """
+    One row per trading day — the agent's pre-market briefing.
+    Read by strategy worker at 09:15 to bias direction + position sizing.
+    """
+    __tablename__ = "premarket_briefings"
+
+    briefing_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    sentiment: Mapped[str] = mapped_column(String(16), nullable=False)
+    conviction: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+    overall_impact: Mapped[str] = mapped_column(String(16), nullable=False)
+    position_size_multiplier: Mapped[Decimal] = mapped_column(Numeric(4, 2), nullable=False)
+    skip_trading: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    nifty_bias: Mapped[str] = mapped_column(String(16), nullable=False)
+    banknifty_bias: Mapped[str] = mapped_column(String(16), nullable=False)
+    intraday_phases: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+    headlines_summary: Mapped[str | None] = mapped_column(Text)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_messages: Mapped[list] = mapped_column(JSONB, default=list)
+    tools_used: Mapped[list] = mapped_column(JSONB, default=list)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    cost_inr: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+
+
 class AuditLogRow(Base):
     """Append-only narrative log of significant events. Do not delete rows."""
     __tablename__ = "audit_log"
