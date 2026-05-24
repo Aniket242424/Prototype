@@ -1029,14 +1029,14 @@ function render(d) {
   }
 
   // ---------- LLM usage (compact) ----------
-  const u = d.llm_usage || { total: { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 }, by_agent: [] };
-  const uEl = $("llm-usage");
-  const t = u.total || { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 };
-  const failNote = t.failures > 0
-    ? ` · <span style="color:var(--red)">${t.failures} failed</span>` : '';
-  const perAgent = (u.by_agent || []).length === 0
+  const usage = d.llm_usage || { total: { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 }, by_agent: [] };
+  const usageEl = $("llm-usage");
+  const usageTotal = usage.total || { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 };
+  const usageFailNote = usageTotal.failures > 0
+    ? ` · <span style="color:var(--red)">${usageTotal.failures} failed</span>` : '';
+  const usagePerAgent = (usage.by_agent || []).length === 0
     ? '<span style="color:var(--muted)">no calls yet</span>'
-    : (u.by_agent.map(a => `
+    : (usage.by_agent.map(a => `
         <span style="margin-right:18px">
           <code>${a.agent_name}</code>
           <span class="small" style="color:var(--muted)">
@@ -1044,13 +1044,13 @@ function render(d) {
           </span>
         </span>
       `).join(""));
-  uEl.innerHTML = `
+  usageEl.innerHTML = `
     <div style="margin-bottom:6px">
-      <span class="value num">${t.calls}</span> <span class="label">calls</span> ·
-      <span class="value num">${t.tokens.toLocaleString()}</span> <span class="label">tokens</span> ·
-      <span class="value num">₹${t.cost_inr.toFixed(2)}</span>${failNote}
+      <span class="value num">${usageTotal.calls}</span> <span class="label">calls</span> ·
+      <span class="value num">${usageTotal.tokens.toLocaleString()}</span> <span class="label">tokens</span> ·
+      <span class="value num">₹${usageTotal.cost_inr.toFixed(2)}</span>${usageFailNote}
     </div>
-    <div>${perAgent}</div>
+    <div>${usagePerAgent}</div>
   `;
 
   // ---------- Phase 4 panels ----------
