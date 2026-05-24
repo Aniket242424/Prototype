@@ -45,6 +45,15 @@ from trading_agent.infrastructure.redis_client import make_redis
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(verify_credentials)])
 
 
+async def _llm_usage_summary() -> dict[str, Any]:
+    """Last-7-days LLM usage aggregated for the dashboard widget."""
+    try:
+        from trading_agent.ai.usage import usage_summary
+        return await usage_summary(days=7)
+    except Exception:
+        return {"window_days": 7, "total": {"calls": 0, "tokens": 0, "cost_inr": 0.0, "failures": 0}, "by_agent": []}
+
+
 async def _premarket_briefing_summary() -> dict[str, Any]:
     """Latest pre-market briefing (Phase 7.1). None if no briefing stored yet."""
     try:
@@ -624,6 +633,7 @@ async def dashboard_status() -> dict[str, Any]:
             "strategy_signals": await _strategy_signals_summary(),
             "phase4_worker_alive": bool(await redis.get("worker:phase4:heartbeat")) if redis_ok else False,
             "premarket_briefing": await _premarket_briefing_summary(),
+            "llm_usage": await _llm_usage_summary(),
             "phases": {
                 "phase_0_scaffold": "completed",
                 "phase_1_1_market_data": "completed",

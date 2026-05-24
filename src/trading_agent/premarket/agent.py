@@ -22,9 +22,12 @@ import json
 from datetime import date, datetime
 from typing import Any
 
+import time
+
 from pydantic import ValidationError
 
 from trading_agent.ai import get_llm_client, get_model_id
+from trading_agent.ai.usage import record_llm_call
 from trading_agent.core.config import AppSettings, get_settings
 from trading_agent.core.logging import get_logger
 from trading_agent.core.time_utils import IST, now_ist
@@ -150,15 +153,40 @@ async def run_briefing_agent(
     final_text: str | None = None
     for turn in range(max_turns):
         log.info("premarket.agent.turn", turn=turn + 1, max_turns=max_turns)
-        resp = await client.messages.create(
-            model=model_id,
-            max_tokens=max_tokens_per_turn,
-            system=SYSTEM_PROMPT,
-            tools=all_tool_definitions(),
-            messages=messages,
-        )
-        total_in += resp.usage.input_tokens
-        total_out += resp.usage.output_tokens
+        turn_started = time.monotonic()
+        turn_success = True
+        turn_error: str | None = None
+        turn_in = 0
+        turn_out = 0
+        try:
+            resp = await client.messages.create(
+                model=model_id,
+                max_tokens=max_tokens_per_turn,
+                system=SYSTEM_PROMPT,
+                tools=all_tool_definitions(),
+                messages=messages,
+            )
+            turn_in = resp.usage.input_tokens
+            turn_out = resp.usage.output_tokens
+        except Exception as e:
+            turn_success = False
+            turn_error = str(e)[:500]
+            raise
+        finally:
+            # Always log usage — even on failure (turn_in/out are 0 in that case)
+            await record_llm_call(
+                agent_name="premarket_briefing",
+                backend=settings.advisor_backend,
+                model=model_id,
+                tokens_in=turn_in,
+                tokens_out=turn_out,
+                cost_inr=_cost_inr(turn_in, turn_out),
+                latency_ms=int((time.monotonic() - turn_started) * 1000),
+                success=turn_success,
+                error=turn_error,
+            )
+        total_in += turn_in
+        total_out += turn_out
 
         # Append the assistant turn to the conversation
         messages.append({"role": "assistant", "content": resp.content})

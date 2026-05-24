@@ -342,6 +342,28 @@ class PremarketBriefingRow(Base):
     cost_inr: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
 
 
+class LlmUsageLogRow(Base):
+    """
+    One row per LLM API call (Anthropic direct OR Bedrock).
+    Used by the dashboard to show per-agent token spend.
+    """
+    __tablename__ = "llm_usage_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    backend: Mapped[str] = mapped_column(String(16), nullable=False)  # anthropic | bedrock
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_inr: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class AuditLogRow(Base):
     """Append-only narrative log of significant events. Do not delete rows."""
     __tablename__ = "audit_log"

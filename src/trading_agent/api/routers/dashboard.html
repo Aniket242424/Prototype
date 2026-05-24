@@ -362,8 +362,13 @@
   </div>
 
   <div class="panel full">
-    <h2>Pre-market briefing (Phase 7.1)</h2>
+    <h2>Pre-market briefing</h2>
     <div id="premarket-briefing" class="small">No briefing available yet — agent runs daily at 08:30 IST.</div>
+  </div>
+
+  <div class="panel full">
+    <h2>LLM usage (last 7 days)</h2>
+    <div id="llm-usage" class="small">—</div>
   </div>
 
   <div class="panel full">
@@ -394,8 +399,12 @@
   </div>
 
   <div class="panel full">
-    <h2>Phase progress</h2>
-    <div class="phase-list" id="phase-list"></div>
+    <details>
+      <summary style="cursor:pointer; list-style:none">
+        <h2 style="display:inline-block; margin:0">Phase progress <span class="small" style="color:var(--muted); font-weight:400; text-transform:none; letter-spacing:0">(click to expand)</span></h2>
+      </summary>
+      <div class="phase-list" id="phase-list" style="margin-top:10px"></div>
+    </details>
   </div>
 </main>
 
@@ -982,41 +991,67 @@ function render(d) {
   document.querySelector("#orders-recent-table tbody").innerHTML =
     orderRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No orders yet</td></tr>`;
 
-  // ---------- Phase 7.1 pre-market briefing ----------
+  // ---------- Pre-market briefing (compact) ----------
   const pm = d.premarket_briefing || { available: false };
   const pmEl = $("premarket-briefing");
   if (!pm.available) {
-    pmEl.innerHTML = '<span style="color:var(--muted)">No briefing available yet — agent runs daily at 08:30 IST.</span>';
+    pmEl.innerHTML = '<span style="color:var(--muted)">No briefing yet — agent runs daily at 08:30 IST.</span>';
   } else {
     const sentColor = (s) => ({
       STRONG_BULL: "b-green", BULL: "b-green",
       NEUTRAL: "b-grey",
       BEAR: "b-red", STRONG_BEAR: "b-red",
     }[s] || "b-grey");
-    const impColor = (i) => ({
-      LOW: "b-green", MEDIUM: "b-amber", HIGH: "b-red", EXTREME: "b-red",
-    }[i] || "b-grey");
-    const skipBanner = pm.skip_trading
-      ? '<div style="color:var(--red);font-weight:600;margin-bottom:6px">⚠️ Agent recommends SKIP TRADING today</div>' : '';
-    const phasesHtml = Object.entries(pm.intraday_phases || {}).map(
-      ([k, v]) => `<span style="margin-right:10px"><code>${k}</code>→${badge(sentColor(v), v)}</span>`
-    ).join("");
+    const skipNote = pm.skip_trading
+      ? '<span style="color:var(--red);font-weight:600">⚠️ SKIP TRADING</span> · ' : '';
     pmEl.innerHTML = `
-      ${skipBanner}
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:10px">
-        ${row("Date", `<span class="value">${pm.briefing_date}</span>`)}
-        ${row("Sentiment", `${badge(sentColor(pm.sentiment), pm.sentiment)} <span class="small">conv ${pm.conviction.toFixed(2)}</span>`)}
-        ${row("Impact", badge(impColor(pm.overall_impact), pm.overall_impact))}
-        ${row("Size mult", `<span class="value num">${pm.position_size_multiplier.toFixed(2)}×</span>`)}
-        ${row("NIFTY bias", badge(sentColor(pm.nifty_bias), pm.nifty_bias))}
-        ${row("BANKNIFTY bias", badge(sentColor(pm.banknifty_bias), pm.banknifty_bias))}
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:8px">
+        ${skipNote}
+        <span><span class="label">${pm.briefing_date}</span></span>
+        <span>${badge(sentColor(pm.sentiment), pm.sentiment)} <span class="small" style="color:var(--muted)">conv ${pm.conviction.toFixed(2)}</span></span>
+        <span><span class="label">Size</span> <span class="value num">${pm.position_size_multiplier.toFixed(2)}×</span></span>
+        <span><span class="label">NIFTY</span> ${badge(sentColor(pm.nifty_bias), pm.nifty_bias)}</span>
+        <span><span class="label">BANKNIFTY</span> ${badge(sentColor(pm.banknifty_bias), pm.banknifty_bias)}</span>
       </div>
-      ${phasesHtml ? `<div style="margin-bottom:8px"><span class="label">Intraday phases:</span> ${phasesHtml}</div>` : ''}
-      ${pm.headlines_summary ? `<div style="margin-bottom:6px"><span class="label">Setup:</span> ${pm.headlines_summary}</div>` : ''}
-      <div style="margin-bottom:6px"><span class="label">Rationale:</span> ${pm.rationale}</div>
-      <div class="small" style="color:var(--muted)">tools=${(pm.tools_used||[]).join(",")} · tokens=${pm.tokens_used} · cost=₹${pm.cost_inr.toFixed(2)}</div>
+      <details>
+        <summary style="cursor:pointer; color:var(--accent); font-size:11px; text-transform:uppercase; letter-spacing:0.5px">
+          Rationale + intraday phases
+        </summary>
+        <div style="margin-top:8px">
+          ${pm.headlines_summary ? `<div style="margin-bottom:6px"><span class="label">Setup:</span> ${pm.headlines_summary}</div>` : ''}
+          <div style="margin-bottom:6px"><span class="label">Rationale:</span> ${pm.rationale}</div>
+          ${Object.keys(pm.intraday_phases || {}).length ?
+            `<div style="margin-bottom:6px"><span class="label">Phases:</span> ${Object.entries(pm.intraday_phases).map(([k,v]) => `<code>${k}</code>→${badge(sentColor(v), v)}`).join(" · ")}</div>` : ''}
+          <div class="small" style="color:var(--muted)">tools=${(pm.tools_used||[]).join(",")} · tokens=${pm.tokens_used} · cost=₹${pm.cost_inr.toFixed(2)}</div>
+        </div>
+      </details>
     `;
   }
+
+  // ---------- LLM usage (compact) ----------
+  const u = d.llm_usage || { total: { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 }, by_agent: [] };
+  const uEl = $("llm-usage");
+  const t = u.total || { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 };
+  const failNote = t.failures > 0
+    ? ` · <span style="color:var(--red)">${t.failures} failed</span>` : '';
+  const perAgent = (u.by_agent || []).length === 0
+    ? '<span style="color:var(--muted)">no calls yet</span>'
+    : (u.by_agent.map(a => `
+        <span style="margin-right:18px">
+          <code>${a.agent_name}</code>
+          <span class="small" style="color:var(--muted)">
+            ${a.calls} call${a.calls === 1 ? '' : 's'} · ${a.tokens.toLocaleString()} tok · ₹${a.cost_inr.toFixed(2)}
+          </span>
+        </span>
+      `).join(""));
+  uEl.innerHTML = `
+    <div style="margin-bottom:6px">
+      <span class="value num">${t.calls}</span> <span class="label">calls</span> ·
+      <span class="value num">${t.tokens.toLocaleString()}</span> <span class="label">tokens</span> ·
+      <span class="value num">₹${t.cost_inr.toFixed(2)}</span>${failNote}
+    </div>
+    <div>${perAgent}</div>
+  `;
 
   // ---------- Phase 4 panels ----------
   const advisor = d.advisor || { calls_today: 0, vetoes_today: 0, recent: [] };
