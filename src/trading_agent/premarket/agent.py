@@ -27,6 +27,7 @@ import time
 from pydantic import ValidationError
 
 from trading_agent.ai import get_llm_client, get_model_id
+from trading_agent.ai.budget import BudgetExhaustedError, check_budget_or_raise
 from trading_agent.ai.usage import record_llm_call
 from trading_agent.core.config import AppSettings, get_settings
 from trading_agent.core.logging import get_logger
@@ -152,6 +153,10 @@ async def run_briefing_agent(
 
     final_text: str | None = None
     for turn in range(max_turns):
+        # Budget gate: refuse to call Claude if operator-set allowance is consumed.
+        # Raises BudgetExhaustedError → caller (worker) catches + alerts operator.
+        await check_budget_or_raise("premarket_briefing")
+
         log.info("premarket.agent.turn", turn=turn + 1, max_turns=max_turns)
         turn_started = time.monotonic()
         turn_success = True

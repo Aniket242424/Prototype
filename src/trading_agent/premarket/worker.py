@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date, datetime, time, timedelta
 
+from trading_agent.ai.budget import BudgetExhaustedError
 from trading_agent.core.logging import get_logger
 from trading_agent.core.time_utils import IST, now_ist
 from trading_agent.infrastructure.db import session_scope
@@ -118,12 +119,35 @@ def _format_briefing_for_telegram(b: PremarketBriefing) -> str:
 # One-shot briefing pipeline
 # ============================================================
 
-async def run_once(target_date: date | None = None) -> PremarketBriefing:
-    """Run the agent, persist the briefing, push to Telegram. Returns the briefing."""
+async def run_once(target_date: date | None = None) -> PremarketBriefing | None:
+    """
+    Run the agent, persist the briefing, push to Telegram. Returns the
+    briefing on success, or None if the budget was exhausted (operator
+    alerted via Telegram).
+    """
     target_date = target_date or now_ist().date()
     log.info("premarket.worker.running", date=target_date.isoformat())
 
-    briefing = await run_briefing_agent(briefing_date=target_date)
+    try:
+        briefing = await run_briefing_agent(briefing_date=target_date)
+    except BudgetExhaustedError as e:
+        log.warning(
+            "premarket.worker.budget_exhausted",
+            agent_name=e.agent_name,
+            consumed=e.consumed,
+            allowance=e.allowance,
+        )
+        await telegram_alert(
+            "info",
+            (
+                f"<b>🛑 Pre-market briefing skipped — budget exhausted</b>\n"
+                f"Agent: <code>{e.agent_name}</code>\n"
+                f"Consumed: <b>{e.consumed:,}</b> / {e.allowance:,} tokens\n\n"
+                "Refill on the dashboard: <i>Diagnostics → agent budgets</i>"
+            ),
+            dedup_key=f"budget_exhausted_{e.agent_name}_{target_date.isoformat()}",
+        )
+        return None
 
     async with session_scope() as session:
         await save_briefing(session, briefing)

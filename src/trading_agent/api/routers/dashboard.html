@@ -416,6 +416,31 @@
   </div>
 
   <div class="panel full">
+    <h2>Agent token budgets</h2>
+    <div class="small" style="color:var(--muted); margin-bottom:8px">
+      Per-agent LLM token allowance. Agent stops calling Claude when its budget is exhausted.
+      Click <b>Refill</b> to reset the counter (allowance stays the same).
+    </div>
+    <div id="agent-budgets-table"></div>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border)">
+      <div class="small" style="color:var(--muted); margin-bottom:6px">Set or update a budget:</div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+        <input id="bud-name" type="text" placeholder="agent_name (e.g. premarket_briefing)"
+               style="flex:2; min-width:180px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <input id="bud-allowance" type="number" placeholder="100000" min="0"
+               style="flex:1; min-width:100px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <input id="bud-notes" type="text" placeholder="notes (optional)"
+               style="flex:2; min-width:120px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <button class="btn btn-green" onclick="saveAgentBudget()">Save</button>
+        <span id="bud-status" class="small" style="color:var(--muted)"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel full">
     <details>
       <summary style="cursor:pointer; list-style:none">
         <h2 style="display:inline-block; margin:0">Phase progress <span class="small" style="color:var(--muted); font-weight:400; text-transform:none; letter-spacing:0">(click to expand)</span></h2>
@@ -651,6 +676,52 @@ async function ctrl(method, url, label) {
     setTimeout(refresh, 600);  // give the spawn/exit a moment
   } catch (e) {
     toast(label + " failed: " + e.message, "var(--red)");
+  }
+}
+
+async function saveAgentBudget() {
+  const nameEl = document.getElementById("bud-name");
+  const allowanceEl = document.getElementById("bud-allowance");
+  const notesEl = document.getElementById("bud-notes");
+  const statusEl = document.getElementById("bud-status");
+  const name = (nameEl.value || "").trim();
+  const allowance = parseInt(allowanceEl.value, 10);
+  const notes = (notesEl.value || "").trim() || null;
+  if (!name) {
+    statusEl.textContent = "agent_name required"; statusEl.style.color = "var(--amber)"; return;
+  }
+  if (isNaN(allowance) || allowance < 0) {
+    statusEl.textContent = "allowance must be a non-negative integer"; statusEl.style.color = "var(--amber)"; return;
+  }
+  statusEl.textContent = "Saving…"; statusEl.style.color = "var(--muted)";
+  try {
+    const r = await fetch("/control/agent_budgets", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({agent_name: name, allowance, notes}),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    nameEl.value = ""; allowanceEl.value = ""; notesEl.value = "";
+    statusEl.textContent = `✓ Saved ${body.agent_name}: ${body.allowance.toLocaleString()} tokens`;
+    statusEl.style.color = "var(--green)";
+    toast("Budget saved ✓", "var(--green)");
+    setTimeout(refresh, 400);
+  } catch (e) {
+    statusEl.textContent = "✗ " + e.message; statusEl.style.color = "var(--red)";
+  }
+}
+
+async function refillAgentBudget(agentName) {
+  if (!confirm(`Refill budget for "${agentName}"? Consumed counter resets to 0.`)) return;
+  try {
+    const r = await fetch(`/control/agent_budgets/${encodeURIComponent(agentName)}/refill`, {method: "POST"});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    toast(`Refilled ${agentName} ✓`, "var(--green)");
+    setTimeout(refresh, 400);
+  } catch (e) {
+    toast("Refill failed: " + e.message, "var(--red)");
   }
 }
 
@@ -1104,6 +1175,55 @@ function render(d) {
         </div>
       </details>
     `;
+  }
+
+  // ---------- Agent budgets (Diagnostics tab) ----------
+  const budgets = d.agent_budgets || [];
+  const budTableEl = document.getElementById("agent-budgets-table");
+  if (budTableEl) {
+    if (budgets.length === 0) {
+      budTableEl.innerHTML = '<span style="color:var(--muted)">No budgets set yet. Add one below to enforce per-agent token limits.</span>';
+    } else {
+      const rows = budgets.map(b => {
+        const pct = b.allowance > 0 ? Math.min(100, (b.consumed / b.allowance) * 100) : 0;
+        const barColor = b.exhausted ? "var(--red)" : pct > 80 ? "var(--amber)" : "var(--green)";
+        const statusBadge = b.exhausted
+          ? badge("b-red", "EXHAUSTED")
+          : pct > 80 ? badge("b-amber", "LOW")
+          : badge("b-green", "OK");
+        return `
+          <tr>
+            <td><code>${b.agent_name}</code></td>
+            <td class="num">${b.allowance.toLocaleString()}</td>
+            <td class="num">${b.consumed.toLocaleString()}</td>
+            <td class="num">${b.remaining.toLocaleString()}</td>
+            <td>
+              <div style="background:var(--bg); border:1px solid var(--border); border-radius:3px; height:10px; width:120px; overflow:hidden">
+                <div style="background:${barColor}; height:100%; width:${pct}%"></div>
+              </div>
+            </td>
+            <td>${statusBadge}</td>
+            <td><button class="btn" onclick="refillAgentBudget('${b.agent_name}')">Refill</button></td>
+          </tr>
+        `;
+      }).join("");
+      budTableEl.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th class="num">Allowance</th>
+              <th class="num">Consumed</th>
+              <th class="num">Remaining</th>
+              <th>Progress</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
   }
 
   // ---------- LLM usage (compact) ----------

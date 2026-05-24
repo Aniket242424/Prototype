@@ -364,6 +364,29 @@ class LlmUsageLogRow(Base):
     )
 
 
+class AgentTokenBudgetRow(Base):
+    """
+    Per-agent LLM token budget. One row per agent_name.
+
+    Budget model: operator sets an `allowance` (tokens). Consumed is
+    computed live by summing `llm_usage_log` rows where
+    ts >= refilled_at and agent_name matches. When consumed >= allowance,
+    the agent's pre-call check fails until operator clicks Refill, which
+    updates refilled_at to now.
+    """
+    __tablename__ = "agent_token_budgets"
+
+    agent_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    allowance: Mapped[int] = mapped_column(Integer, nullable=False)
+    refilled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class AuditLogRow(Base):
     """Append-only narrative log of significant events. Do not delete rows."""
     __tablename__ = "audit_log"

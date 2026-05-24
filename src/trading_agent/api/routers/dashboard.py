@@ -45,6 +45,26 @@ from trading_agent.infrastructure.redis_client import make_redis
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(verify_credentials)])
 
 
+async def _agent_budgets_summary() -> list[dict]:
+    """All configured per-agent LLM token budgets (Phase 7.1.5+)."""
+    try:
+        from trading_agent.ai.budget import list_budgets
+        states = await list_budgets()
+        return [
+            {
+                "agent_name": b.agent_name,
+                "allowance": b.allowance,
+                "consumed": b.consumed,
+                "remaining": b.remaining,
+                "refilled_at": b.refilled_at.isoformat(),
+                "exhausted": b.exhausted,
+            }
+            for b in states
+        ]
+    except Exception:
+        return []
+
+
 async def _llm_usage_summary() -> dict[str, Any]:
     """Last-7-days LLM usage aggregated for the dashboard widget."""
     try:
@@ -634,6 +654,7 @@ async def dashboard_status() -> dict[str, Any]:
             "phase4_worker_alive": bool(await redis.get("worker:phase4:heartbeat")) if redis_ok else False,
             "premarket_briefing": await _premarket_briefing_summary(),
             "llm_usage": await _llm_usage_summary(),
+            "agent_budgets": await _agent_budgets_summary(),
             "phases": {
                 "phase_0_scaffold": "completed",
                 "phase_1_1_market_data": "completed",

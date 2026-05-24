@@ -39,6 +39,13 @@ class TokenPayload(BaseModel):
     access_token: str
 
 
+class BudgetPayload(BaseModel):
+    """Operator-set LLM token allowance for a named agent."""
+    agent_name: str
+    allowance: int
+    notes: str | None = None
+
+
 @router.get("/kill-switch")
 async def get_kill_switch():
     r = make_redis()
@@ -266,4 +273,72 @@ async def save_upstox_token(payload: TokenPayload):
         "user_id": validated.user_id,
         "user_name": validated.user_name,
         "saved_at_ist": now_ist().isoformat(timespec="seconds"),
+    }
+
+
+# ============================================================
+# Per-agent LLM token budgets
+# ============================================================
+
+@router.get("/agent_budgets")
+async def list_agent_budgets():
+    """List every configured budget + computed consumed/remaining."""
+    from trading_agent.ai.budget import list_budgets
+    states = await list_budgets()
+    return {
+        "ok": True,
+        "budgets": [
+            {
+                "agent_name": b.agent_name,
+                "allowance": b.allowance,
+                "consumed": b.consumed,
+                "remaining": b.remaining,
+                "refilled_at": b.refilled_at.isoformat(),
+                "exhausted": b.exhausted,
+            }
+            for b in states
+        ],
+    }
+
+
+@router.post("/agent_budgets")
+async def set_agent_budget(payload: BudgetPayload):
+    """Create or update an agent's budget (resets refill counter)."""
+    from trading_agent.ai.budget import set_budget
+    if not payload.agent_name.strip():
+        raise HTTPException(status_code=400, detail="agent_name cannot be empty")
+    if payload.allowance < 0:
+        raise HTTPException(status_code=400, detail="allowance must be >= 0")
+    b = await set_budget(
+        agent_name=payload.agent_name.strip(),
+        allowance=payload.allowance,
+        notes=payload.notes,
+    )
+    return {
+        "ok": True,
+        "agent_name": b.agent_name,
+        "allowance": b.allowance,
+        "consumed": b.consumed,
+        "remaining": b.remaining,
+        "refilled_at": b.refilled_at.isoformat(),
+        "exhausted": b.exhausted,
+    }
+
+
+@router.post("/agent_budgets/{agent_name}/refill")
+async def refill_agent_budget(agent_name: str):
+    """Reset consumed counter to zero without changing allowance."""
+    from trading_agent.ai.budget import refill_budget
+    try:
+        b = await refill_budget(agent_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {
+        "ok": True,
+        "agent_name": b.agent_name,
+        "allowance": b.allowance,
+        "consumed": b.consumed,
+        "remaining": b.remaining,
+        "refilled_at": b.refilled_at.isoformat(),
+        "exhausted": b.exhausted,
     }
