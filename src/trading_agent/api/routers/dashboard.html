@@ -934,10 +934,7 @@ function render(d) {
     row("Vetoes today", `<span class="value num">${fmtInt(advisor.vetoes_today)}</span>`) +
     row("Phase 4 worker", d.phase4_worker_alive ? badge("b-green", "running") : badge("b-grey", "stopped"));
 
-  // Today's closed PnL
-  const pnlToday = (positions.closed_today || []).reduce(
-    (a, p) => a + (p.pnl_inr || 0), 0
-  );
+  // Today's closed PnL (reuse pnlToday from the metric strip block above)
   const closedPnlBadge = pnlToday > 0
     ? badge("b-green", "+₹" + fmtNum(pnlToday, 0))
     : pnlToday < 0
