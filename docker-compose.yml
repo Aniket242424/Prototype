@@ -91,6 +91,19 @@ services:
       - ./logs:/app/logs
     command: ["python", "-m", "trading_agent.regime.worker"]
 
+  telegram_listener:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    command: ["python", "-m", "trading_agent.monitoring.telegram_listener_runner"]
+
 volumes:
   postgres-data:
   redis-data:
