@@ -45,6 +45,64 @@ from trading_agent.infrastructure.redis_client import make_redis
 router = APIRouter(tags=["dashboard"], dependencies=[Depends(verify_credentials)])
 
 
+async def _agent_budgets_summary() -> list[dict]:
+    """All configured per-agent LLM token budgets (Phase 7.1.5+)."""
+    try:
+        from trading_agent.ai.budget import list_budgets
+        states = await list_budgets()
+        return [
+            {
+                "agent_name": b.agent_name,
+                "allowance": b.allowance,
+                "consumed": b.consumed,
+                "remaining": b.remaining,
+                "refilled_at": b.refilled_at.isoformat(),
+                "exhausted": b.exhausted,
+            }
+            for b in states
+        ]
+    except Exception:
+        return []
+
+
+async def _llm_usage_summary() -> dict[str, Any]:
+    """Last-7-days LLM usage aggregated for the dashboard widget."""
+    try:
+        from trading_agent.ai.usage import usage_summary
+        return await usage_summary(days=7)
+    except Exception:
+        return {"window_days": 7, "total": {"calls": 0, "tokens": 0, "cost_inr": 0.0, "failures": 0}, "by_agent": []}
+
+
+async def _premarket_briefing_summary() -> dict[str, Any]:
+    """Latest pre-market briefing (Phase 7.1). None if no briefing stored yet."""
+    try:
+        from trading_agent.premarket.storage import load_latest_briefing_via_scope
+        b = await load_latest_briefing_via_scope()
+    except Exception:
+        return {"available": False, "error": "load_failed"}
+    if b is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "briefing_date": b.briefing_date.isoformat(),
+        "generated_at": b.generated_at.isoformat(),
+        "sentiment": b.sentiment.value,
+        "conviction": round(b.conviction, 2),
+        "overall_impact": b.overall_impact.value,
+        "position_size_multiplier": round(b.position_size_multiplier, 2),
+        "skip_trading": b.skip_trading,
+        "nifty_bias": b.nifty_bias.value,
+        "banknifty_bias": b.banknifty_bias.value,
+        "intraday_phases": b.intraday_phases,
+        "headlines_summary": b.headlines_summary,
+        "rationale": b.rationale,
+        "tools_used": b.tools_used,
+        "tokens_used": b.tokens_used,
+        "cost_inr": round(b.cost_inr, 2),
+    }
+
+
 async def _vix_summary() -> dict[str, Any]:
     try:
         async with session_scope() as session:
@@ -594,6 +652,9 @@ async def dashboard_status() -> dict[str, Any]:
             "positions": await _positions_summary(),
             "strategy_signals": await _strategy_signals_summary(),
             "phase4_worker_alive": bool(await redis.get("worker:phase4:heartbeat")) if redis_ok else False,
+            "premarket_briefing": await _premarket_briefing_summary(),
+            "llm_usage": await _llm_usage_summary(),
+            "agent_budgets": await _agent_budgets_summary(),
             "phases": {
                 "phase_0_scaffold": "completed",
                 "phase_1_1_market_data": "completed",
@@ -610,7 +671,8 @@ async def dashboard_status() -> dict[str, Any]:
                 "phase_5_backtesting": "completed",
                 "phase_6_1_telegram_alerter_and_watcher": "completed",
                 "phase_6_2_telegram_token_refresh": "completed",
-                "phase_7_monitoring_and_learning": "pending",
+                "phase_7_1_premarket_briefing_agent": "completed",
+                "phase_7_2_intraday_anomaly_news": "pending",
             },
         }
     finally:

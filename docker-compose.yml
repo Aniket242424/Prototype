@@ -104,6 +104,19 @@ services:
       - ./logs:/app/logs
     command: ["python", "-m", "trading_agent.monitoring.telegram_listener_runner"]
 
+  premarket_briefing:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    command: ["python", "-m", "trading_agent.premarket.runner"]
+
 volumes:
   postgres-data:
   redis-data:

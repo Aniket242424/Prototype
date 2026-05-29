@@ -34,6 +34,22 @@ class ResetPayload(BaseModel):
     operator: str
 
 
+class TokenPayload(BaseModel):
+    """JWT pasted from the Upstox developer dashboard's Generate button."""
+    access_token: str
+
+
+class BudgetPayload(BaseModel):
+    """Operator-set LLM token allowance for a named agent."""
+    agent_name: str
+    allowance: int
+    notes: str | None = None
+    # When True (default), refilled_at is set to now and the consumed
+    # counter effectively resets to zero. When False, only allowance and
+    # notes change — used by "Edit" to bump a quota without wiping usage.
+    reset_refill: bool = True
+
+
 @router.get("/kill-switch")
 async def get_kill_switch():
     r = make_redis()
@@ -194,4 +210,150 @@ async def live_trading_status():
             "ack_file_sha256": file_sha,
             "db_sha256": db_sha,
         },
+    }
+
+
+@router.post("/token")
+async def save_upstox_token(payload: TokenPayload):
+    """
+    Validate + persist an Upstox access token pasted from the UI.
+
+    Mirrors the Telegram /token flow: calls /v2/user/profile to verify the
+    token is real, then stores it encrypted via TokenManager.
+
+    Returns the same shape the dashboard widget expects. Never echoes the
+    token back.
+    """
+    from datetime import datetime
+    from trading_agent.auth.token_manager import TokenManager
+    from trading_agent.auth.token_validator import (
+        TokenValidationError,
+        validate_access_token,
+    )
+    from trading_agent.auth.upstox_auth import UpstoxToken
+    from trading_agent.core.time_utils import now_ist
+    from trading_agent.infrastructure.models import UserRow
+
+    raw = payload.access_token.strip().strip("`").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="access_token cannot be empty")
+    if raw.count(".") != 2 or not raw.startswith("eyJ"):
+        raise HTTPException(
+            status_code=400,
+            detail="Doesn't look like a JWT — expected three dot-separated parts starting with eyJ",
+        )
+
+    settings = get_settings()
+    try:
+        validated = await validate_access_token(raw, settings)
+    except TokenValidationError as e:
+        raise HTTPException(status_code=400, detail=f"Upstox rejected the token: {e}") from e
+
+    tm = TokenManager(settings)
+    token = UpstoxToken(
+        access_token=validated.access_token,
+        extended_token=None,
+        user_id=validated.user_id,
+        user_name=validated.user_name,
+        email=validated.email,
+        broker=validated.broker,
+        issued_at_ist_iso=now_ist().isoformat(),
+    )
+    try:
+        async with session_scope() as session:
+            if await session.get(UserRow, validated.user_id) is None:
+                session.add(UserRow(
+                    user_id=validated.user_id,
+                    display_name=validated.user_name,
+                    email=validated.email,
+                ))
+                await session.flush()
+            await tm.save(session, token)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB write failed: {e}") from e
+
+    return {
+        "ok": True,
+        "user_id": validated.user_id,
+        "user_name": validated.user_name,
+        "saved_at_ist": now_ist().isoformat(timespec="seconds"),
+    }
+
+
+# ============================================================
+# Per-agent LLM token budgets
+# ============================================================
+
+@router.get("/agent_budgets")
+async def list_agent_budgets():
+    """List every configured budget + computed consumed/remaining."""
+    from trading_agent.ai.budget import list_budgets
+    states = await list_budgets()
+    return {
+        "ok": True,
+        "budgets": [
+            {
+                "agent_name": b.agent_name,
+                "allowance": b.allowance,
+                "consumed": b.consumed,
+                "remaining": b.remaining,
+                "refilled_at": b.refilled_at.isoformat(),
+                "exhausted": b.exhausted,
+            }
+            for b in states
+        ],
+    }
+
+
+@router.post("/agent_budgets")
+async def set_agent_budget(payload: BudgetPayload):
+    """Create or update an agent's budget (resets refill counter)."""
+    from trading_agent.ai.budget import set_budget
+    if not payload.agent_name.strip():
+        raise HTTPException(status_code=400, detail="agent_name cannot be empty")
+    if payload.allowance < 0:
+        raise HTTPException(status_code=400, detail="allowance must be >= 0")
+    b = await set_budget(
+        agent_name=payload.agent_name.strip(),
+        allowance=payload.allowance,
+        notes=payload.notes,
+        reset_refill=payload.reset_refill,
+    )
+    return {
+        "ok": True,
+        "agent_name": b.agent_name,
+        "allowance": b.allowance,
+        "consumed": b.consumed,
+        "remaining": b.remaining,
+        "refilled_at": b.refilled_at.isoformat(),
+        "exhausted": b.exhausted,
+    }
+
+
+@router.delete("/agent_budgets/{agent_name}")
+async def delete_agent_budget(agent_name: str):
+    """Remove an agent's budget (the agent reverts to unlimited mode)."""
+    from trading_agent.ai.budget import delete_budget
+    deleted = await delete_budget(agent_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"No budget found for agent '{agent_name}'")
+    return {"ok": True, "deleted": agent_name}
+
+
+@router.post("/agent_budgets/{agent_name}/refill")
+async def refill_agent_budget(agent_name: str):
+    """Reset consumed counter to zero without changing allowance."""
+    from trading_agent.ai.budget import refill_budget
+    try:
+        b = await refill_budget(agent_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {
+        "ok": True,
+        "agent_name": b.agent_name,
+        "allowance": b.allowance,
+        "consumed": b.consumed,
+        "remaining": b.remaining,
+        "refilled_at": b.refilled_at.isoformat(),
+        "exhausted": b.exhausted,
     }

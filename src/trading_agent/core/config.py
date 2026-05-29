@@ -67,6 +67,11 @@ class AppSettings(BaseSettings):
     # Verify available profiles in your account via:
     #   aws bedrock list-inference-profiles --region ap-south-1
     bedrock_model_id: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Optional explicit AWS creds for local dev. On EC2 these are unset and
+    # boto3 falls back to the instance IAM role. Locally, set in .env or
+    # configure via `aws configure`.
+    aws_access_key_id: SecretStr | None = None
+    aws_secret_access_key: SecretStr | None = None
 
     # --- Postgres ---
     postgres_host: str = "localhost"

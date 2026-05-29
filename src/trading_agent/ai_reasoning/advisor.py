@@ -107,6 +107,7 @@ class ClaudeAdvisor:
         timeout_sec: float = 5.0,
         cache_ttl_sec: int = 60,
         max_tokens: int = 600,
+        agentic: bool = True,
     ):
         self._settings = settings or get_settings()
         self._redis = redis
@@ -114,6 +115,11 @@ class ClaudeAdvisor:
         self._cache_ttl_sec = cache_ttl_sec
         self._max_tokens = max_tokens
         self._backend = self._settings.advisor_backend
+        # When True, evaluate() dispatches to the agentic_advisor (tool-use
+        # loop). When False, uses the original single-shot path. Default
+        # True so the system is truly agentic by default. Tests with
+        # client_override force the single-shot path for determinism.
+        self._agentic = agentic and (client_override is None)
         # Mock client for tests (Anthropic SDK-shaped); when set, bypasses real backends
         self._client = client_override
         self._bedrock_client = None  # lazy-init
@@ -146,6 +152,14 @@ class ClaudeAdvisor:
         Always returns an AdvisorDecision. Never raises — failures become
         neutral fallbacks so the trading path stays alive.
         """
+        # If agentic mode (default for prod), dispatch to the tool-use agent
+        # which fetches today's briefing / recent trades / strategy perf as
+        # context before deciding. Tests with mock client_override use the
+        # original single-shot path for determinism.
+        if self._agentic:
+            from trading_agent.ai_reasoning.agentic_advisor import evaluate as _agentic_eval
+            return await _agentic_eval(signal, regime, intel, indicators, opportunity, settings=self._settings)
+
         # Sensible default decision letter based on direction
         default_letter = "CALL" if signal.direction.value == "LONG" else "PUT"
         # `model` is used in the AdvisorDecision audit field. Reflects what we actually called.

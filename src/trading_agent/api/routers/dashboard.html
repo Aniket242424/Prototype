@@ -4,97 +4,127 @@
 <meta charset="utf-8" />
 <title>Trading_Agent — Dashboard</title>
 <style>
+  /* Kite-inspired light theme — clean, professional, Indian trader-friendly */
   :root {
-    --bg: #0e1116;
-    --panel: #161b22;
-    --panel-2: #1f2630;
-    --border: #2a313c;
-    --text: #d0d6df;
-    --muted: #8b949e;
-    --accent: #4493f8;
-    --green: #3fb950;
-    --red: #f85149;
-    --amber: #d29922;
-    --grey: #6e7681;
+    --bg: #f9f9f9;
+    --panel: #ffffff;
+    --panel-2: #fafafa;
+    --border: #ebebeb;
+    --border-strong: #d9d9d9;
+    --text: #424242;
+    --text-strong: #1f2937;
+    --muted: #9b9b9b;
+    --accent: #ff5722;       /* Kite signature orange */
+    --accent-hover: #f4511e;
+    --green: #00a86b;        /* Kite-style green for buy/positive */
+    --green-soft: #e8f5e9;
+    --red: #ef5350;          /* Kite-style red for sell/negative */
+    --red-soft: #ffebee;
+    --amber: #ff9800;
+    --amber-soft: #fff3e0;
+    --grey: #9b9b9b;
+    --grey-soft: #f5f5f5;
+    --blue: #1976d2;
+    --blue-soft: #e3f2fd;
+    --shadow-card: 0 1px 2px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.04);
+    --shadow-hover: 0 2px 6px rgba(0,0,0,0.08);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     font-size: 13px;
     line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   header {
-    padding: 16px 24px;
+    padding: 14px 24px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
-  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
-  header .meta { color: var(--muted); font-size: 12px; }
+  header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-strong);
+    letter-spacing: -0.01em;
+  }
+  header .meta { color: var(--muted); font-size: 12px; font-weight: 500; }
   main {
-    padding: 16px 24px;
+    padding: 18px 24px;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-    gap: 16px;
+    gap: 14px;
   }
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 14px 16px;
+    box-shadow: var(--shadow-card);
   }
   .panel.full { grid-column: 1 / -1; }
   .panel h2 {
-    margin: 0 0 10px;
-    font-size: 13px;
+    margin: 0 0 12px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
   }
   .row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 4px 0;
-    border-bottom: 1px dashed transparent;
+    padding: 5px 0;
   }
-  .row + .row { border-top: 1px dashed var(--border); }
-  .label { color: var(--muted); }
-  .value { color: var(--text); font-weight: 500; }
-  .value.num { font-variant-numeric: tabular-nums; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .label { color: var(--muted); font-size: 12px; }
+  .value { color: var(--text-strong); font-weight: 500; }
+  .value.num { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
   .badge {
     display: inline-block;
     padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
+    border-radius: 3px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.04em;
+    border: none;
   }
-  .b-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.4); }
-  .b-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.4); }
-  .b-amber { background: rgba(210,153,34,0.15); color: var(--amber); border: 1px solid rgba(210,153,34,0.4); }
-  .b-grey { background: rgba(110,118,129,0.15); color: var(--grey); border: 1px solid rgba(110,118,129,0.4); }
-  .b-blue { background: rgba(68,147,248,0.15); color: var(--accent); border: 1px solid rgba(68,147,248,0.4); }
+  .b-green { background: var(--green-soft); color: var(--green); }
+  .b-red { background: var(--red-soft); color: var(--red); }
+  .b-amber { background: var(--amber-soft); color: var(--amber); }
+  .b-grey { background: var(--grey-soft); color: var(--grey); }
+  .b-blue { background: var(--blue-soft); color: var(--blue); }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--panel-2);
+  }
+  td { font-size: 12px; color: var(--text-strong); }
   td.num, th.num { text-align: right; }
   .small { font-size: 11px; color: var(--muted); }
-  .footer { color: var(--muted); padding: 12px 24px; font-size: 11px; border-top: 1px solid var(--border); }
+  .footer { color: var(--muted); padding: 12px 24px; font-size: 11px; border-top: 1px solid var(--border); background: var(--panel); }
   .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-  .pulse.green { background: var(--green); box-shadow: 0 0 0 0 rgba(63,185,80,0.6); animation: pulse 2s infinite; }
+  .pulse.green { background: var(--green); box-shadow: 0 0 0 0 rgba(0,168,107,0.4); animation: pulse 2s infinite; }
   .pulse.red { background: var(--red); }
   .pulse.grey { background: var(--grey); }
   @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(63,185,80,0.6); }
-    70% { box-shadow: 0 0 0 8px rgba(63,185,80,0); }
-    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+    0% { box-shadow: 0 0 0 0 rgba(0,168,107,0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(0,168,107,0); }
+    100% { box-shadow: 0 0 0 0 rgba(0,168,107,0); }
   }
   .phase-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
   .phase {
@@ -109,67 +139,81 @@
   .err { color: var(--red); font-size: 12px; }
   .btn {
     display: inline-block;
-    padding: 5px 12px;
+    padding: 6px 14px;
     margin-right: 6px;
-    border: 1px solid var(--border);
-    background: var(--panel-2);
-    color: var(--text);
+    border: 1px solid var(--border-strong);
+    background: var(--panel);
+    color: var(--text-strong);
     border-radius: 4px;
     cursor: pointer;
     font: inherit;
     font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
   }
   .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .btn-green { border-color: rgba(63,185,80,0.5); color: var(--green); }
-  .btn-green:hover:not(:disabled) { background: rgba(63,185,80,0.1); }
-  .btn-red { border-color: rgba(248,81,73,0.5); color: var(--red); }
-  .btn-red:hover:not(:disabled) { background: rgba(248,81,73,0.1); }
-  .btn-amber { border-color: rgba(210,153,34,0.5); color: var(--amber); }
-  .btn-amber:hover:not(:disabled) { background: rgba(210,153,34,0.1); }
-  .worker-row { display: grid; grid-template-columns: 130px 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-green { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+  .btn-green:hover:not(:disabled) { background: var(--green); color: #fff; border-color: var(--green); }
+  .btn-red { border-color: var(--red); color: var(--red); background: var(--red-soft); }
+  .btn-red:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+  .btn-amber { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+  .btn-amber:hover:not(:disabled) { background: var(--amber); color: #fff; border-color: var(--amber); }
+  .worker-row {
+    display: grid;
+    grid-template-columns: 140px 90px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
   .worker-row:last-child { border-bottom: 0; }
-  .worker-name { font-weight: 600; }
+  .worker-name { font-weight: 600; color: var(--text-strong); }
   .control-toast {
-    position: fixed; bottom: 16px; right: 16px;
-    padding: 10px 14px; border-radius: 6px;
-    background: var(--panel-2); border: 1px solid var(--border);
-    font-size: 12px; max-width: 360px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    position: fixed; bottom: 20px; right: 20px;
+    padding: 10px 16px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--border-strong);
+    color: var(--text-strong);
+    font-size: 12px; font-weight: 500; max-width: 360px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
     z-index: 1000;
     transition: opacity 0.3s;
   }
 
-  /* ---------- Metrics strip (prominent top stats) ---------- */
+  /* ---------- Metrics strip (Kite-style hero numbers) ---------- */
   .metrics-strip {
-    padding: 14px 24px;
-    background: linear-gradient(90deg, #161b22, #1a2030);
+    padding: 16px 24px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
   }
   .metric-card {
-    background: var(--panel-2);
+    background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 14px 16px;
     display: flex;
     flex-direction: column;
     gap: 4px;
+    box-shadow: var(--shadow-card);
+    transition: box-shadow 0.15s;
   }
+  .metric-card:hover { box-shadow: var(--shadow-hover); }
   .metric-label {
     color: var(--muted);
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
     font-weight: 600;
   }
   .metric-value {
     font-size: 22px;
-    font-weight: 700;
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
-    color: var(--text);
+    color: var(--text-strong);
+    letter-spacing: -0.01em;
   }
   .metric-value.positive { color: var(--green); }
   .metric-value.negative { color: var(--red); }
@@ -182,16 +226,16 @@
   /* ---------- Tab navigation ---------- */
   .tabs {
     display: flex;
-    gap: 4px;
+    gap: 0;
     padding: 0 24px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
     position: sticky;
     top: 0;
     z-index: 10;
   }
   .tab {
-    padding: 12px 20px;
+    padding: 12px 18px;
     cursor: pointer;
     color: var(--muted);
     border: none;
@@ -199,26 +243,49 @@
     border-bottom: 2px solid transparent;
     font: inherit;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     transition: color 0.15s, border-color 0.15s;
   }
-  .tab:hover { color: var(--text); }
+  .tab:hover { color: var(--text-strong); }
   .tab.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
+    font-weight: 600;
   }
   .tab-count {
     display: inline-block;
     margin-left: 6px;
     padding: 1px 7px;
     border-radius: 10px;
-    background: var(--panel-2);
+    background: var(--grey-soft);
     color: var(--text);
     font-size: 10px;
     font-weight: 600;
   }
   .tab-content { display: none; }
   .tab-content.active { display: grid; }
+
+  /* Form inputs (Kite-style) */
+  input[type="text"], input[type="number"], textarea {
+    background: var(--panel) !important;
+    color: var(--text-strong) !important;
+    border-color: var(--border-strong) !important;
+  }
+  input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent) !important;
+  }
+  code {
+    background: var(--grey-soft);
+    color: var(--text-strong);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+  }
+  details > summary { color: var(--text-strong); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -234,24 +301,27 @@
 <!-- Prominent metrics strip — always visible across all tabs -->
 <section class="metrics-strip">
   <div class="metric-card">
-    <span class="metric-label">💰 Capital</span>
+    <span class="metric-label">Capital</span>
     <span class="metric-value" id="m-capital">--</span>
     <span class="metric-sub" id="m-capital-sub">paper</span>
   </div>
   <div class="metric-card">
-    <span class="metric-label">💵 PnL Today (Closed)</span>
+    <span class="metric-label">P&amp;L Today (Closed)</span>
     <span class="metric-value" id="m-pnl-today">--</span>
     <span class="metric-sub" id="m-pnl-today-sub">no trades closed</span>
   </div>
   <div class="metric-card">
-    <span class="metric-label">📊 Open Positions</span>
+    <span class="metric-label">Open Positions</span>
     <span class="metric-value" id="m-open-count">--</span>
     <span class="metric-sub" id="m-open-sub">flat</span>
   </div>
   <div class="metric-card">
-    <span class="metric-label">🪙 Upstox Token</span>
+    <span class="metric-label">Upstox Token</span>
     <span class="metric-value" id="m-token">--</span>
     <span class="metric-sub" id="m-token-sub">--</span>
+    <button id="m-token-reauth-btn" class="btn btn-amber"
+            style="display:none; margin-top:8px; align-self:flex-start"
+            onclick="openReauthFlow()">Re-auth</button>
   </div>
 </section>
 
@@ -262,11 +332,68 @@
     Positions<span class="tab-count" id="t-positions-count">0</span>
   </button>
   <button class="tab" data-tab="activity" onclick="switchTab('activity')">Activity Log</button>
+  <button class="tab" data-tab="diagnostics" onclick="switchTab('diagnostics')">Diagnostics</button>
 </nav>
 
 <main id="main" class="tab-content active" data-tab="overview">
+
+  <!-- ACTION ITEMS — conditional, only rendered when needs attention -->
+  <div class="panel full" id="action-items-panel" style="display:none; border-color:var(--amber)">
+    <h2>Needs your attention</h2>
+    <div id="action-items"></div>
+  </div>
+
+  <!-- TODAY'S PLAN — pre-market briefing -->
   <div class="panel full">
-    <h2>System Control</h2>
+    <h2>Today's plan</h2>
+    <div id="premarket-briefing" class="small">No briefing yet — agent runs daily at 08:30 IST.</div>
+  </div>
+
+  <!-- ACTIVE OPPORTUNITY — only matters when something is happening -->
+  <div class="panel full">
+    <h2>Active opportunity</h2>
+    <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
+  </div>
+
+  <!-- LLM USAGE — compact -->
+  <div class="panel full">
+    <h2>LLM usage (last 7 days)</h2>
+    <div id="llm-usage" class="small">—</div>
+  </div>
+
+  <!-- AGENT BUDGETS — promoted from Diagnostics for visibility -->
+  <div class="panel full">
+    <h2>Agent token budgets</h2>
+    <div class="small" style="color:var(--muted); margin-bottom:8px">
+      Per-agent LLM token allowance. Agent stops calling Claude when its budget is exhausted; click <b>Refill</b> to reset.
+    </div>
+    <div id="agent-budgets-table"></div>
+    <div style="margin-top:14px; padding-top:10px; border-top:1px solid var(--border)">
+      <div class="small" style="color:var(--muted); margin-bottom:6px">Add or update a budget:</div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center">
+        <input id="bud-name" type="text" placeholder="agent_name (e.g. premarket_briefing)"
+               style="flex:2; min-width:180px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <input id="bud-allowance" type="number" placeholder="100000" min="0"
+               style="flex:1; min-width:100px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <input id="bud-notes" type="text" placeholder="notes (optional)"
+               style="flex:2; min-width:120px; padding:5px 8px; background:var(--bg); color:var(--text);
+                      border:1px solid var(--border); border-radius:4px; font-family:inherit; font-size:12px">
+        <button class="btn btn-green" onclick="saveAgentBudget()">Save</button>
+        <span id="bud-status" class="small" style="color:var(--muted)"></span>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ============================================================ -->
+<!-- DIAGNOSTICS TAB — engineering / power-user view              -->
+<!-- ============================================================ -->
+<main class="tab-content" data-tab="diagnostics">
+  <div class="panel full">
+    <h2>System control</h2>
     <div id="workers-rows"></div>
     <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       <button class="btn btn-green" onclick="ctrl('POST','/control/workers/start','Starting all workers')">Start All</button>
@@ -289,6 +416,27 @@
   <div class="panel">
     <h2>Authentication</h2>
     <div id="auth-rows"></div>
+    <details style="margin-top:10px">
+      <summary style="cursor:pointer; color:var(--accent); font-size:11px; text-transform:uppercase; letter-spacing:0.5px">
+        Refresh Upstox token
+      </summary>
+      <div style="margin-top:8px">
+        <div class="small" style="color:var(--muted); margin-bottom:6px">
+          Paste the JWT from
+          <a href="https://account.upstox.com/developer/apps" target="_blank" style="color:var(--accent)">Upstox apps</a>
+          (tap "Generate" next to Access Token). Saved encrypted in DB.
+        </div>
+        <textarea id="upstox-jwt-input" rows="3"
+                  placeholder="eyJ0eXAiOiJKV1Qi..."
+                  style="width:100%; padding:6px 8px; background:var(--bg); color:var(--text);
+                         border:1px solid var(--border); border-radius:4px; font-family:inherit;
+                         font-size:11px; resize:vertical; box-sizing:border-box"></textarea>
+        <div style="margin-top:6px; display:flex; gap:8px; align-items:center">
+          <button class="btn btn-green" onclick="saveUpstoxToken()">Save token</button>
+          <span id="upstox-jwt-status" class="small" style="color:var(--muted)"></span>
+        </div>
+      </div>
+    </details>
   </div>
 
   <div class="panel">
@@ -299,6 +447,21 @@
   <div class="panel">
     <h2>Kill switch</h2>
     <div id="ks-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Trading state</h2>
+    <div id="trading-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>India VIX</h2>
+    <div id="vix-rows"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Options chain — snapshots today</h2>
+    <div id="chain-rows"></div>
   </div>
 
   <div class="panel full">
@@ -325,21 +488,6 @@
     </table>
   </div>
 
-  <div class="panel">
-    <h2>India VIX</h2>
-    <div id="vix-rows"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Options chain — snapshots today</h2>
-    <div id="chain-rows"></div>
-  </div>
-
-  <div class="panel">
-    <h2>Trading state</h2>
-    <div id="trading-rows"></div>
-  </div>
-
   <div class="panel full">
     <h2>Regime & Opportunity (Phase 2)</h2>
     <div id="phase2-status" class="small" style="margin-bottom:8px;color:var(--muted)"></div>
@@ -363,13 +511,12 @@
   </div>
 
   <div class="panel full">
-    <h2>Active Opportunity</h2>
-    <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
-  </div>
-
-  <div class="panel full">
-    <h2>Phase progress</h2>
-    <div class="phase-list" id="phase-list"></div>
+    <details>
+      <summary style="cursor:pointer; list-style:none">
+        <h2 style="display:inline-block; margin:0">Phase progress <span class="small" style="color:var(--muted); font-weight:400; text-transform:none; letter-spacing:0">(click to expand)</span></h2>
+      </summary>
+      <div class="phase-list" id="phase-list" style="margin-top:10px"></div>
+    </details>
   </div>
 </main>
 
@@ -602,6 +749,144 @@ async function ctrl(method, url, label) {
   }
 }
 
+// Track when the form is in "edit" mode (preserves the consumed counter on save).
+// Cleared when a Save succeeds or the user types a different agent_name.
+let _budgetEditMode = false;
+
+function editAgentBudget(agentName, allowance) {
+  document.getElementById("bud-name").value = agentName;
+  document.getElementById("bud-allowance").value = allowance;
+  document.getElementById("bud-notes").value = "";
+  const statusEl = document.getElementById("bud-status");
+  statusEl.textContent = `Editing "${agentName}" — Save preserves the consumed counter.`;
+  statusEl.style.color = "var(--accent)";
+  _budgetEditMode = true;
+  // Scroll the form into view + focus allowance for quick adjust
+  document.getElementById("bud-allowance").focus();
+  document.getElementById("bud-allowance").select();
+}
+
+async function saveAgentBudget() {
+  const nameEl = document.getElementById("bud-name");
+  const allowanceEl = document.getElementById("bud-allowance");
+  const notesEl = document.getElementById("bud-notes");
+  const statusEl = document.getElementById("bud-status");
+  const name = (nameEl.value || "").trim();
+  const allowance = parseInt(allowanceEl.value, 10);
+  const notes = (notesEl.value || "").trim() || null;
+  if (!name) {
+    statusEl.textContent = "agent_name required"; statusEl.style.color = "var(--amber)"; return;
+  }
+  if (isNaN(allowance) || allowance < 0) {
+    statusEl.textContent = "allowance must be a non-negative integer"; statusEl.style.color = "var(--amber)"; return;
+  }
+  // If editing, preserve consumed counter (reset_refill=false).
+  // If adding new, default behavior resets it.
+  const payload = {agent_name: name, allowance, notes, reset_refill: !_budgetEditMode};
+  statusEl.textContent = _budgetEditMode ? "Updating…" : "Saving…";
+  statusEl.style.color = "var(--muted)";
+  try {
+    const r = await fetch("/control/agent_budgets", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    nameEl.value = ""; allowanceEl.value = ""; notesEl.value = "";
+    const action = _budgetEditMode ? "Updated" : "Saved";
+    statusEl.textContent = `✓ ${action} ${body.agent_name}: ${body.allowance.toLocaleString()} tokens`;
+    statusEl.style.color = "var(--green)";
+    toast(`Budget ${action.toLowerCase()} ✓`, "var(--green)");
+    _budgetEditMode = false;
+    setTimeout(refresh, 400);
+  } catch (e) {
+    statusEl.textContent = "✗ " + e.message; statusEl.style.color = "var(--red)";
+  }
+}
+
+async function refillAgentBudget(agentName) {
+  if (!confirm(`Refill budget for "${agentName}"? Consumed counter resets to 0.`)) return;
+  try {
+    const r = await fetch(`/control/agent_budgets/${encodeURIComponent(agentName)}/refill`, {method: "POST"});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    toast(`Refilled ${agentName} ✓`, "var(--green)");
+    setTimeout(refresh, 400);
+  } catch (e) {
+    toast("Refill failed: " + e.message, "var(--red)");
+  }
+}
+
+async function deleteAgentBudget(agentName) {
+  if (!confirm(`Delete budget for "${agentName}"? Agent will revert to UNLIMITED mode (no quota).`)) return;
+  try {
+    const r = await fetch(`/control/agent_budgets/${encodeURIComponent(agentName)}`, {method: "DELETE"});
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    toast(`Deleted budget for ${agentName} ✓`, "var(--green)");
+    setTimeout(refresh, 400);
+  } catch (e) {
+    toast("Delete failed: " + e.message, "var(--red)");
+  }
+}
+
+// One-click flow from the hero card → ready to paste the new JWT.
+//   1. Open Upstox developer apps in a new tab (so user can tap Generate)
+//   2. Switch dashboard to Diagnostics tab
+//   3. Expand the collapsed "Refresh Upstox token" section
+//   4. Scroll the token input into view + focus it
+function openReauthFlow() {
+  window.open("https://account.upstox.com/developer/apps", "_blank", "noopener");
+  // Tab switch (the existing helper persists choice in localStorage)
+  if (typeof switchTab === "function") {
+    switchTab("diagnostics");
+  }
+  // Defer DOM tweaks so the diagnostics panel is rendered/visible first
+  setTimeout(() => {
+    // Open the <details> wrapping the textarea
+    const ta = document.getElementById("upstox-jwt-input");
+    if (ta) {
+      let n = ta.parentElement;
+      while (n && n.tagName !== "DETAILS") n = n.parentElement;
+      if (n) n.open = true;
+      ta.scrollIntoView({behavior: "smooth", block: "center"});
+      ta.focus();
+    }
+  }, 60);
+}
+
+async function saveUpstoxToken() {
+  const inputEl = document.getElementById("upstox-jwt-input");
+  const statusEl = document.getElementById("upstox-jwt-status");
+  const raw = (inputEl.value || "").trim();
+  if (!raw) {
+    statusEl.textContent = "Paste a JWT first.";
+    statusEl.style.color = "var(--amber)";
+    return;
+  }
+  statusEl.textContent = "Validating against Upstox…";
+  statusEl.style.color = "var(--muted)";
+  try {
+    const r = await fetch("/control/token", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({access_token: raw}),
+    });
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    // Clear input (so token doesn't sit in DOM) and show success
+    inputEl.value = "";
+    statusEl.textContent = `✓ Saved for user ${body.user_id} (${body.user_name || "?"})`;
+    statusEl.style.color = "var(--green)";
+    toast("Upstox token saved ✓", "var(--green)");
+    setTimeout(refresh, 600);  // refresh dashboard so auth panel reflects new state
+  } catch (e) {
+    statusEl.textContent = "✗ " + e.message;
+    statusEl.style.color = "var(--red)";
+  }
+}
+
 async function restartAPI() {
   if (!confirm("Restart API + all workers? Dashboard will be unreachable for ~5s.")) return;
   toast("Restarting API…", "var(--amber)");
@@ -665,18 +950,22 @@ function render(d) {
   // Token status
   const tokenEl = $("m-token");
   const tokenSubEl = $("m-token-sub");
+  const reauthBtn = $("m-token-reauth-btn");
   if (!d.auth || !d.auth.present) {
     tokenEl.textContent = "MISSING";
     tokenEl.className = "metric-value negative";
     tokenSubEl.textContent = "run upstox auth";
+    if (reauthBtn) reauthBtn.style.display = "";
   } else if (!d.auth.valid) {
     tokenEl.textContent = "EXPIRED";
     tokenEl.className = "metric-value negative";
     tokenSubEl.textContent = "re-auth required";
+    if (reauthBtn) reauthBtn.style.display = "";
   } else {
     tokenEl.textContent = "VALID";
     tokenEl.className = "metric-value positive";
     tokenSubEl.textContent = "expires " + fmtCountdown(d.auth.seconds_to_expiry);
+    if (reauthBtn) reauthBtn.style.display = "none";
   }
 
   // Infra
@@ -924,6 +1213,182 @@ function render(d) {
   }).join("");
   document.querySelector("#orders-recent-table tbody").innerHTML =
     orderRows || `<tr><td colspan="9" class="small" style="color:var(--muted);text-align:center">No orders yet</td></tr>`;
+
+  // ---------- Action items (Overview tab) ----------
+  // Surfaces things that need operator attention so a new user doesn't have
+  // to scan all of Diagnostics to know what's wrong.
+  const actionItems = [];
+  const auth = d.trading || {};
+  // Token: stale / expired / missing
+  const tokenState = (d.trading && d.trading.upstox_token) || {};
+  if (tokenState.state === "EXPIRED" || tokenState.state === "MISSING") {
+    actionItems.push({
+      severity: "high",
+      msg: tokenState.state === "MISSING"
+        ? "Upstox token missing — bot can't connect to market data."
+        : "Upstox token expired — bot can't connect to market data.",
+      action: 'Switch to <b>Diagnostics</b> tab → <b>Authentication</b> → <b>Refresh Upstox token</b>',
+    });
+  }
+  // Worker stopped
+  const workersStatus = d.workers && d.workers.status;
+  if (workersStatus) {
+    Object.entries(workersStatus).forEach(([name, w]) => {
+      if (!w.running) {
+        actionItems.push({
+          severity: "high",
+          msg: `Worker "${name}" is stopped.`,
+          action: 'Switch to <b>Diagnostics</b> tab → <b>System control</b> → <b>Start All</b>',
+        });
+      }
+    });
+  }
+  // Kill switch tripped
+  if (d.kill_switch && d.kill_switch.tripped) {
+    actionItems.push({
+      severity: "high",
+      msg: "Kill switch is tripped — bot will not trade.",
+      action: 'Switch to <b>Diagnostics</b> tab → <b>Kill switch</b> → Reset',
+    });
+  }
+  // Skip-trading from briefing
+  if (d.premarket_briefing && d.premarket_briefing.available && d.premarket_briefing.skip_trading) {
+    actionItems.push({
+      severity: "med",
+      msg: "Pre-market agent recommends SKIP TRADING today (high uncertainty).",
+      action: "Review rationale in Today's plan below.",
+    });
+  }
+
+  const aiPanel = document.getElementById("action-items-panel");
+  const aiEl = document.getElementById("action-items");
+  if (actionItems.length === 0) {
+    aiPanel.style.display = "none";
+  } else {
+    aiPanel.style.display = "";
+    aiEl.innerHTML = actionItems.map(it => `
+      <div style="padding:6px 0; border-top:1px dashed var(--border)">
+        <span style="color:${it.severity === 'high' ? 'var(--red)' : 'var(--amber)'}; font-weight:600">●</span>
+        <span style="margin-left:6px">${it.msg}</span>
+        <div class="small" style="color:var(--muted); margin-left:18px; margin-top:2px">→ ${it.action}</div>
+      </div>
+    `).join("");
+  }
+
+  // ---------- Pre-market briefing (compact) ----------
+  const pm = d.premarket_briefing || { available: false };
+  const pmEl = $("premarket-briefing");
+  if (!pm.available) {
+    pmEl.innerHTML = '<span style="color:var(--muted)">No briefing yet — agent runs daily at 08:30 IST.</span>';
+  } else {
+    const sentColor = (s) => ({
+      STRONG_BULL: "b-green", BULL: "b-green",
+      NEUTRAL: "b-grey",
+      BEAR: "b-red", STRONG_BEAR: "b-red",
+    }[s] || "b-grey");
+    const skipNote = pm.skip_trading
+      ? '<span style="color:var(--red);font-weight:600">⚠️ SKIP TRADING</span> · ' : '';
+    pmEl.innerHTML = `
+      <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:8px">
+        ${skipNote}
+        <span><span class="label">${pm.briefing_date}</span></span>
+        <span>${badge(sentColor(pm.sentiment), pm.sentiment)} <span class="small" style="color:var(--muted)">conv ${pm.conviction.toFixed(2)}</span></span>
+        <span><span class="label">Size</span> <span class="value num">${pm.position_size_multiplier.toFixed(2)}×</span></span>
+        <span><span class="label">NIFTY</span> ${badge(sentColor(pm.nifty_bias), pm.nifty_bias)}</span>
+        <span><span class="label">BANKNIFTY</span> ${badge(sentColor(pm.banknifty_bias), pm.banknifty_bias)}</span>
+      </div>
+      <details>
+        <summary style="cursor:pointer; color:var(--accent); font-size:11px; text-transform:uppercase; letter-spacing:0.5px">
+          Rationale + intraday phases
+        </summary>
+        <div style="margin-top:8px">
+          ${pm.headlines_summary ? `<div style="margin-bottom:6px"><span class="label">Setup:</span> ${pm.headlines_summary}</div>` : ''}
+          <div style="margin-bottom:6px"><span class="label">Rationale:</span> ${pm.rationale}</div>
+          ${Object.keys(pm.intraday_phases || {}).length ?
+            `<div style="margin-bottom:6px"><span class="label">Phases:</span> ${Object.entries(pm.intraday_phases).map(([k,v]) => `<code>${k}</code>→${badge(sentColor(v), v)}`).join(" · ")}</div>` : ''}
+          <div class="small" style="color:var(--muted)">tools=${(pm.tools_used||[]).join(",")} · tokens=${pm.tokens_used} · cost=₹${pm.cost_inr.toFixed(2)}</div>
+        </div>
+      </details>
+    `;
+  }
+
+  // ---------- Agent budgets (Diagnostics tab) ----------
+  const budgets = d.agent_budgets || [];
+  const budTableEl = document.getElementById("agent-budgets-table");
+  if (budTableEl) {
+    if (budgets.length === 0) {
+      budTableEl.innerHTML = '<span style="color:var(--muted)">No budgets set yet. Add one below to enforce per-agent token limits.</span>';
+    } else {
+      const rows = budgets.map(b => {
+        const pct = b.allowance > 0 ? Math.min(100, (b.consumed / b.allowance) * 100) : 0;
+        const barColor = b.exhausted ? "var(--red)" : pct > 80 ? "var(--amber)" : "var(--green)";
+        const statusBadge = b.exhausted
+          ? badge("b-red", "EXHAUSTED")
+          : pct > 80 ? badge("b-amber", "LOW")
+          : badge("b-green", "OK");
+        return `
+          <tr>
+            <td><code>${b.agent_name}</code></td>
+            <td class="num">${b.allowance.toLocaleString()}</td>
+            <td class="num">${b.consumed.toLocaleString()}</td>
+            <td class="num">${b.remaining.toLocaleString()}</td>
+            <td>
+              <div style="background:var(--bg); border:1px solid var(--border); border-radius:3px; height:10px; width:120px; overflow:hidden">
+                <div style="background:${barColor}; height:100%; width:${pct}%"></div>
+              </div>
+            </td>
+            <td>${statusBadge}</td>
+            <td>
+              <button class="btn" onclick="editAgentBudget('${b.agent_name}', ${b.allowance})">Edit</button>
+              <button class="btn" onclick="refillAgentBudget('${b.agent_name}')">Refill</button>
+              <button class="btn btn-red" onclick="deleteAgentBudget('${b.agent_name}')">Delete</button>
+            </td>
+          </tr>
+        `;
+      }).join("");
+      budTableEl.innerHTML = `
+        <table>
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th class="num">Allowance</th>
+              <th class="num">Consumed</th>
+              <th class="num">Remaining</th>
+              <th>Progress</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+  }
+
+  // ---------- LLM usage (compact) ----------
+  const usage = d.llm_usage || { total: { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 }, by_agent: [] };
+  const usageEl = $("llm-usage");
+  const usageTotal = usage.total || { calls: 0, tokens: 0, cost_inr: 0.0, failures: 0 };
+  const usageFailNote = usageTotal.failures > 0
+    ? ` · <span style="color:var(--red)">${usageTotal.failures} failed</span>` : '';
+  const usagePerAgent = (usage.by_agent || []).length === 0
+    ? '<span style="color:var(--muted)">no calls yet</span>'
+    : (usage.by_agent.map(a => `
+        <span style="margin-right:18px">
+          <code>${a.agent_name}</code>
+          <span class="small" style="color:var(--muted)">
+            ${a.calls} call${a.calls === 1 ? '' : 's'} · ${a.tokens.toLocaleString()} tok · ₹${a.cost_inr.toFixed(2)}
+          </span>
+        </span>
+      `).join(""));
+  usageEl.innerHTML = `
+    <div style="margin-bottom:6px">
+      <span class="value num">${usageTotal.calls}</span> <span class="label">calls</span> ·
+      <span class="value num">${usageTotal.tokens.toLocaleString()}</span> <span class="label">tokens</span> ·
+      <span class="value num">₹${usageTotal.cost_inr.toFixed(2)}</span>${usageFailNote}
+    </div>
+    <div>${usagePerAgent}</div>
+  `;
 
   // ---------- Phase 4 panels ----------
   const advisor = d.advisor || { calls_today: 0, vetoes_today: 0, recent: [] };

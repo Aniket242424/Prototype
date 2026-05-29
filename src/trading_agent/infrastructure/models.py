@@ -314,6 +314,79 @@ class KillSwitchEventRow(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PremarketBriefingRow(Base):
+    """
+    One row per trading day — the agent's pre-market briefing.
+    Read by strategy worker at 09:15 to bias direction + position sizing.
+    """
+    __tablename__ = "premarket_briefings"
+
+    briefing_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    sentiment: Mapped[str] = mapped_column(String(16), nullable=False)
+    conviction: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
+    overall_impact: Mapped[str] = mapped_column(String(16), nullable=False)
+    position_size_multiplier: Mapped[Decimal] = mapped_column(Numeric(4, 2), nullable=False)
+    skip_trading: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    nifty_bias: Mapped[str] = mapped_column(String(16), nullable=False)
+    banknifty_bias: Mapped[str] = mapped_column(String(16), nullable=False)
+    intraday_phases: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+    headlines_summary: Mapped[str | None] = mapped_column(Text)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_messages: Mapped[list] = mapped_column(JSONB, default=list)
+    tools_used: Mapped[list] = mapped_column(JSONB, default=list)
+    tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    cost_inr: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
+
+
+class LlmUsageLogRow(Base):
+    """
+    One row per LLM API call (Anthropic direct OR Bedrock).
+    Used by the dashboard to show per-agent token spend.
+    """
+    __tablename__ = "llm_usage_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    backend: Mapped[str] = mapped_column(String(16), nullable=False)  # anthropic | bedrock
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_inr: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
+class AgentTokenBudgetRow(Base):
+    """
+    Per-agent LLM token budget. One row per agent_name.
+
+    Budget model: operator sets an `allowance` (tokens). Consumed is
+    computed live by summing `llm_usage_log` rows where
+    ts >= refilled_at and agent_name matches. When consumed >= allowance,
+    the agent's pre-call check fails until operator clicks Refill, which
+    updates refilled_at to now.
+    """
+    __tablename__ = "agent_token_budgets"
+
+    agent_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    allowance: Mapped[int] = mapped_column(Integer, nullable=False)
+    refilled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class AuditLogRow(Base):
     """Append-only narrative log of significant events. Do not delete rows."""
     __tablename__ = "audit_log"
