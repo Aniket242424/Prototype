@@ -4,97 +4,127 @@
 <meta charset="utf-8" />
 <title>Trading_Agent — Dashboard</title>
 <style>
+  /* Kite-inspired light theme — clean, professional, Indian trader-friendly */
   :root {
-    --bg: #0e1116;
-    --panel: #161b22;
-    --panel-2: #1f2630;
-    --border: #2a313c;
-    --text: #d0d6df;
-    --muted: #8b949e;
-    --accent: #4493f8;
-    --green: #3fb950;
-    --red: #f85149;
-    --amber: #d29922;
-    --grey: #6e7681;
+    --bg: #f9f9f9;
+    --panel: #ffffff;
+    --panel-2: #fafafa;
+    --border: #ebebeb;
+    --border-strong: #d9d9d9;
+    --text: #424242;
+    --text-strong: #1f2937;
+    --muted: #9b9b9b;
+    --accent: #ff5722;       /* Kite signature orange */
+    --accent-hover: #f4511e;
+    --green: #00a86b;        /* Kite-style green for buy/positive */
+    --green-soft: #e8f5e9;
+    --red: #ef5350;          /* Kite-style red for sell/negative */
+    --red-soft: #ffebee;
+    --amber: #ff9800;
+    --amber-soft: #fff3e0;
+    --grey: #9b9b9b;
+    --grey-soft: #f5f5f5;
+    --blue: #1976d2;
+    --blue-soft: #e3f2fd;
+    --shadow-card: 0 1px 2px rgba(0,0,0,0.04), 0 1px 4px rgba(0,0,0,0.04);
+    --shadow-hover: 0 2px 6px rgba(0,0,0,0.08);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     font-size: 13px;
     line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   header {
-    padding: 16px 24px;
+    padding: 14px 24px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
-  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
-  header .meta { color: var(--muted); font-size: 12px; }
+  header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-strong);
+    letter-spacing: -0.01em;
+  }
+  header .meta { color: var(--muted); font-size: 12px; font-weight: 500; }
   main {
-    padding: 16px 24px;
+    padding: 18px 24px;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-    gap: 16px;
+    gap: 14px;
   }
   .panel {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 14px 16px;
+    box-shadow: var(--shadow-card);
   }
   .panel.full { grid-column: 1 / -1; }
   .panel h2 {
-    margin: 0 0 10px;
-    font-size: 13px;
+    margin: 0 0 12px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
   }
   .row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 4px 0;
-    border-bottom: 1px dashed transparent;
+    padding: 5px 0;
   }
-  .row + .row { border-top: 1px dashed var(--border); }
-  .label { color: var(--muted); }
-  .value { color: var(--text); font-weight: 500; }
-  .value.num { font-variant-numeric: tabular-nums; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .label { color: var(--muted); font-size: 12px; }
+  .value { color: var(--text-strong); font-weight: 500; }
+  .value.num { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
   .badge {
     display: inline-block;
     padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
+    border-radius: 3px;
+    font-size: 10px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.04em;
+    border: none;
   }
-  .b-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.4); }
-  .b-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.4); }
-  .b-amber { background: rgba(210,153,34,0.15); color: var(--amber); border: 1px solid rgba(210,153,34,0.4); }
-  .b-grey { background: rgba(110,118,129,0.15); color: var(--grey); border: 1px solid rgba(110,118,129,0.4); }
-  .b-blue { background: rgba(68,147,248,0.15); color: var(--accent); border: 1px solid rgba(68,147,248,0.4); }
+  .b-green { background: var(--green-soft); color: var(--green); }
+  .b-red { background: var(--red-soft); color: var(--red); }
+  .b-amber { background: var(--amber-soft); color: var(--amber); }
+  .b-grey { background: var(--grey-soft); color: var(--grey); }
+  .b-blue { background: var(--blue-soft); color: var(--blue); }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: var(--panel-2);
+  }
+  td { font-size: 12px; color: var(--text-strong); }
   td.num, th.num { text-align: right; }
   .small { font-size: 11px; color: var(--muted); }
-  .footer { color: var(--muted); padding: 12px 24px; font-size: 11px; border-top: 1px solid var(--border); }
+  .footer { color: var(--muted); padding: 12px 24px; font-size: 11px; border-top: 1px solid var(--border); background: var(--panel); }
   .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
-  .pulse.green { background: var(--green); box-shadow: 0 0 0 0 rgba(63,185,80,0.6); animation: pulse 2s infinite; }
+  .pulse.green { background: var(--green); box-shadow: 0 0 0 0 rgba(0,168,107,0.4); animation: pulse 2s infinite; }
   .pulse.red { background: var(--red); }
   .pulse.grey { background: var(--grey); }
   @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(63,185,80,0.6); }
-    70% { box-shadow: 0 0 0 8px rgba(63,185,80,0); }
-    100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); }
+    0% { box-shadow: 0 0 0 0 rgba(0,168,107,0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(0,168,107,0); }
+    100% { box-shadow: 0 0 0 0 rgba(0,168,107,0); }
   }
   .phase-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
   .phase {
@@ -109,67 +139,81 @@
   .err { color: var(--red); font-size: 12px; }
   .btn {
     display: inline-block;
-    padding: 5px 12px;
+    padding: 6px 14px;
     margin-right: 6px;
-    border: 1px solid var(--border);
-    background: var(--panel-2);
-    color: var(--text);
+    border: 1px solid var(--border-strong);
+    background: var(--panel);
+    color: var(--text-strong);
     border-radius: 4px;
     cursor: pointer;
     font: inherit;
     font-size: 12px;
+    font-weight: 500;
+    transition: all 0.15s;
   }
   .btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .btn-green { border-color: rgba(63,185,80,0.5); color: var(--green); }
-  .btn-green:hover:not(:disabled) { background: rgba(63,185,80,0.1); }
-  .btn-red { border-color: rgba(248,81,73,0.5); color: var(--red); }
-  .btn-red:hover:not(:disabled) { background: rgba(248,81,73,0.1); }
-  .btn-amber { border-color: rgba(210,153,34,0.5); color: var(--amber); }
-  .btn-amber:hover:not(:disabled) { background: rgba(210,153,34,0.1); }
-  .worker-row { display: grid; grid-template-columns: 130px 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-green { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+  .btn-green:hover:not(:disabled) { background: var(--green); color: #fff; border-color: var(--green); }
+  .btn-red { border-color: var(--red); color: var(--red); background: var(--red-soft); }
+  .btn-red:hover:not(:disabled) { background: var(--red); color: #fff; border-color: var(--red); }
+  .btn-amber { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+  .btn-amber:hover:not(:disabled) { background: var(--amber); color: #fff; border-color: var(--amber); }
+  .worker-row {
+    display: grid;
+    grid-template-columns: 140px 90px 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
   .worker-row:last-child { border-bottom: 0; }
-  .worker-name { font-weight: 600; }
+  .worker-name { font-weight: 600; color: var(--text-strong); }
   .control-toast {
-    position: fixed; bottom: 16px; right: 16px;
-    padding: 10px 14px; border-radius: 6px;
-    background: var(--panel-2); border: 1px solid var(--border);
-    font-size: 12px; max-width: 360px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    position: fixed; bottom: 20px; right: 20px;
+    padding: 10px 16px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--border-strong);
+    color: var(--text-strong);
+    font-size: 12px; font-weight: 500; max-width: 360px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
     z-index: 1000;
     transition: opacity 0.3s;
   }
 
-  /* ---------- Metrics strip (prominent top stats) ---------- */
+  /* ---------- Metrics strip (Kite-style hero numbers) ---------- */
   .metrics-strip {
-    padding: 14px 24px;
-    background: linear-gradient(90deg, #161b22, #1a2030);
+    padding: 16px 24px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
   }
   .metric-card {
-    background: var(--panel-2);
+    background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 14px 16px;
     display: flex;
     flex-direction: column;
     gap: 4px;
+    box-shadow: var(--shadow-card);
+    transition: box-shadow 0.15s;
   }
+  .metric-card:hover { box-shadow: var(--shadow-hover); }
   .metric-label {
     color: var(--muted);
     font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.06em;
     font-weight: 600;
   }
   .metric-value {
     font-size: 22px;
-    font-weight: 700;
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
-    color: var(--text);
+    color: var(--text-strong);
+    letter-spacing: -0.01em;
   }
   .metric-value.positive { color: var(--green); }
   .metric-value.negative { color: var(--red); }
@@ -182,16 +226,16 @@
   /* ---------- Tab navigation ---------- */
   .tabs {
     display: flex;
-    gap: 4px;
+    gap: 0;
     padding: 0 24px;
+    background: var(--panel);
     border-bottom: 1px solid var(--border);
-    background: var(--bg);
     position: sticky;
     top: 0;
     z-index: 10;
   }
   .tab {
-    padding: 12px 20px;
+    padding: 12px 18px;
     cursor: pointer;
     color: var(--muted);
     border: none;
@@ -199,26 +243,49 @@
     border-bottom: 2px solid transparent;
     font: inherit;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     transition: color 0.15s, border-color 0.15s;
   }
-  .tab:hover { color: var(--text); }
+  .tab:hover { color: var(--text-strong); }
   .tab.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
+    font-weight: 600;
   }
   .tab-count {
     display: inline-block;
     margin-left: 6px;
     padding: 1px 7px;
     border-radius: 10px;
-    background: var(--panel-2);
+    background: var(--grey-soft);
     color: var(--text);
     font-size: 10px;
     font-weight: 600;
   }
   .tab-content { display: none; }
   .tab-content.active { display: grid; }
+
+  /* Form inputs (Kite-style) */
+  input[type="text"], input[type="number"], textarea {
+    background: var(--panel) !important;
+    color: var(--text-strong) !important;
+    border-color: var(--border-strong) !important;
+  }
+  input[type="text"]:focus, input[type="number"]:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent) !important;
+  }
+  code {
+    background: var(--grey-soft);
+    color: var(--text-strong);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+  }
+  details > summary { color: var(--text-strong); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -234,22 +301,22 @@
 <!-- Prominent metrics strip — always visible across all tabs -->
 <section class="metrics-strip">
   <div class="metric-card">
-    <span class="metric-label">💰 Capital</span>
+    <span class="metric-label">Capital</span>
     <span class="metric-value" id="m-capital">--</span>
     <span class="metric-sub" id="m-capital-sub">paper</span>
   </div>
   <div class="metric-card">
-    <span class="metric-label">💵 PnL Today (Closed)</span>
+    <span class="metric-label">P&amp;L Today (Closed)</span>
     <span class="metric-value" id="m-pnl-today">--</span>
     <span class="metric-sub" id="m-pnl-today-sub">no trades closed</span>
   </div>
   <div class="metric-card">
-    <span class="metric-label">📊 Open Positions</span>
+    <span class="metric-label">Open Positions</span>
     <span class="metric-value" id="m-open-count">--</span>
     <span class="metric-sub" id="m-open-sub">flat</span>
   </div>
   <div class="metric-card">
-    <span class="metric-label">🪙 Upstox Token</span>
+    <span class="metric-label">Upstox Token</span>
     <span class="metric-value" id="m-token">--</span>
     <span class="metric-sub" id="m-token-sub">--</span>
     <button id="m-token-reauth-btn" class="btn btn-amber"
@@ -272,31 +339,31 @@
 
   <!-- ACTION ITEMS — conditional, only rendered when needs attention -->
   <div class="panel full" id="action-items-panel" style="display:none; border-color:var(--amber)">
-    <h2>⚠️ Needs your attention</h2>
+    <h2>Needs your attention</h2>
     <div id="action-items"></div>
   </div>
 
   <!-- TODAY'S PLAN — pre-market briefing -->
   <div class="panel full">
-    <h2>🌅 Today's plan</h2>
+    <h2>Today's plan</h2>
     <div id="premarket-briefing" class="small">No briefing yet — agent runs daily at 08:30 IST.</div>
   </div>
 
   <!-- ACTIVE OPPORTUNITY — only matters when something is happening -->
   <div class="panel full">
-    <h2>🎯 Active opportunity</h2>
+    <h2>Active opportunity</h2>
     <div id="active-opportunity" class="small" style="color:var(--muted)">No active opportunity above threshold.</div>
   </div>
 
   <!-- LLM USAGE — compact -->
   <div class="panel full">
-    <h2>🤖 LLM usage (last 7 days)</h2>
+    <h2>LLM usage (last 7 days)</h2>
     <div id="llm-usage" class="small">—</div>
   </div>
 
   <!-- AGENT BUDGETS — promoted from Diagnostics for visibility -->
   <div class="panel full">
-    <h2>💰 Agent token budgets</h2>
+    <h2>Agent token budgets</h2>
     <div class="small" style="color:var(--muted); margin-bottom:8px">
       Per-agent LLM token allowance. Agent stops calling Claude when its budget is exhausted; click <b>Refill</b> to reset.
     </div>
