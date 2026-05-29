@@ -252,6 +252,9 @@
     <span class="metric-label">🪙 Upstox Token</span>
     <span class="metric-value" id="m-token">--</span>
     <span class="metric-sub" id="m-token-sub">--</span>
+    <button id="m-token-reauth-btn" class="btn btn-amber"
+            style="display:none; margin-top:8px; align-self:flex-start"
+            onclick="openReauthFlow()">Re-auth</button>
   </div>
 </section>
 
@@ -761,6 +764,31 @@ async function deleteAgentBudget(agentName) {
   }
 }
 
+// One-click flow from the hero card → ready to paste the new JWT.
+//   1. Open Upstox developer apps in a new tab (so user can tap Generate)
+//   2. Switch dashboard to Diagnostics tab
+//   3. Expand the collapsed "Refresh Upstox token" section
+//   4. Scroll the token input into view + focus it
+function openReauthFlow() {
+  window.open("https://account.upstox.com/developer/apps", "_blank", "noopener");
+  // Tab switch (the existing helper persists choice in localStorage)
+  if (typeof switchTab === "function") {
+    switchTab("diagnostics");
+  }
+  // Defer DOM tweaks so the diagnostics panel is rendered/visible first
+  setTimeout(() => {
+    // Open the <details> wrapping the textarea
+    const ta = document.getElementById("upstox-jwt-input");
+    if (ta) {
+      let n = ta.parentElement;
+      while (n && n.tagName !== "DETAILS") n = n.parentElement;
+      if (n) n.open = true;
+      ta.scrollIntoView({behavior: "smooth", block: "center"});
+      ta.focus();
+    }
+  }, 60);
+}
+
 async function saveUpstoxToken() {
   const inputEl = document.getElementById("upstox-jwt-input");
   const statusEl = document.getElementById("upstox-jwt-status");
@@ -855,18 +883,22 @@ function render(d) {
   // Token status
   const tokenEl = $("m-token");
   const tokenSubEl = $("m-token-sub");
+  const reauthBtn = $("m-token-reauth-btn");
   if (!d.auth || !d.auth.present) {
     tokenEl.textContent = "MISSING";
     tokenEl.className = "metric-value negative";
     tokenSubEl.textContent = "run upstox auth";
+    if (reauthBtn) reauthBtn.style.display = "";
   } else if (!d.auth.valid) {
     tokenEl.textContent = "EXPIRED";
     tokenEl.className = "metric-value negative";
     tokenSubEl.textContent = "re-auth required";
+    if (reauthBtn) reauthBtn.style.display = "";
   } else {
     tokenEl.textContent = "VALID";
     tokenEl.className = "metric-value positive";
     tokenSubEl.textContent = "expires " + fmtCountdown(d.auth.seconds_to_expiry);
+    if (reauthBtn) reauthBtn.style.display = "none";
   }
 
   // Infra
