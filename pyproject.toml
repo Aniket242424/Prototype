@@ -43,6 +43,10 @@ dependencies = [
     "orjson>=3.9",
     "click>=8.1",                     # CLI scripts
     "protobuf>=5.27",                 # MUST match version used to generate _pb2.py
+
+    # Interactive Brokers (Phase G.2 — US market access via IB Gateway)
+    # ib_async = community-maintained fork of ib_insync with Py 3.12+ compatibility
+    "ib_async>=2.0.0",
 ]
 
 [project.optional-dependencies]
