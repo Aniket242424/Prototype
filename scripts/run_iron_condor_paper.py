@@ -64,6 +64,10 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
 
 from trading_agent.brokers.delta.client import DeltaClient  # noqa: E402
+from trading_agent.brokers.delta.fees import (  # noqa: E402
+    entry_fees_usd,
+    settlement_fees_usd,
+)
 
 # Telegram alerter is optional — never let its absence break the runner.
 try:
@@ -109,6 +113,12 @@ LOTS = int(os.getenv("DELTA_IC_LOTS", "10"))
 MAX_RISK_USD = float(os.getenv("DELTA_IC_MAX_RISK_USD", "25"))
 CONTRACT_VALUE_DEFAULT = 0.001            # BTC per lot (read live per product)
 
+# Paper capital + FX (for ₹ display). Delta settles in USDT, so we track USD
+# natively and convert to INR for the dashboard.
+PAPER_CAPITAL_INR = float(os.getenv("DELTA_IC_CAPITAL_INR", "200000"))
+FX_INR_USD = float(os.getenv("DELTA_IC_FX_INR_USD", "84"))
+PAPER_CAPITAL_USD = PAPER_CAPITAL_INR / FX_INR_USD
+
 # Safety gates
 PAPER = os.getenv("DELTA_PAPER", "true").lower() != "false"
 LIVE_GATE = os.getenv("LIVE_TRADING", "false").lower() == "true"
@@ -120,7 +130,9 @@ CSV_FIELDS = [
     "entry_ts", "settle_ts", "underlying", "expiry", "mode",
     "spot_entry", "spot_settle", "lots", "contract_value",
     "short_call_k", "short_put_k", "long_call_k", "long_put_k",
-    "net_credit_usd", "max_loss_usd", "payoff_usd", "pnl_usd",
+    "net_credit_usd", "max_loss_usd", "payoff_usd",
+    "gross_pnl_usd", "entry_fees_usd", "settle_fees_usd", "net_pnl_usd",
+    "pnl_usd",                       # kept = net_pnl_usd, for backward-compat
     "outcome",
 ]
 
@@ -171,6 +183,7 @@ class CondorState:
     legs: list[dict]
     net_credit_usd: float
     max_loss_usd: float
+    entry_fees_usd: float = 0.0
 
 
 # ============================================================
@@ -368,6 +381,21 @@ def clear_state() -> None:
 
 def append_trade(row: dict) -> None:
     TRADES_CSV.parent.mkdir(parents=True, exist_ok=True)
+    # If an existing file has a DIFFERENT (older) header, migrate it: re-read
+    # old rows and rewrite the whole file under the current schema so columns
+    # never misalign. Only happens once when the schema changes.
+    if TRADES_CSV.exists():
+        existing = list(csv.DictReader(open(TRADES_CSV, newline="", encoding="utf-8")))
+        existing_header = existing[0].keys() if existing else None
+        header_matches = existing_header is not None and set(existing_header) == set(CSV_FIELDS)
+        if not header_matches:
+            with open(TRADES_CSV, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
+                w.writeheader()
+                for old in existing:
+                    w.writerow(old)            # missing new cols -> blank
+                w.writerow(row)
+            return
     write_header = not TRADES_CSV.exists()
     with open(TRADES_CSV, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS, extrasaction="ignore")
@@ -462,17 +490,20 @@ async def cmd_enter() -> None:
             return
 
         net_credit_usd, max_loss_usd = compute_economics(legs, LOTS)
+        fees_in = entry_fees_usd([asdict(l) for l in legs.values()], spot, LOTS)
+        net_credit_after_fees = net_credit_usd - fees_in
 
-        # Risk gate
-        if max_loss_usd > MAX_RISK_USD:
+        # Risk gate (max loss grows by the brokerage we cannot recover)
+        if (max_loss_usd + fees_in) > MAX_RISK_USD:
             msg = (f"Iron Condor ABORT: max-loss ${max_loss_usd:.2f} exceeds "
                    f"DELTA_IC_MAX_RISK_USD ${MAX_RISK_USD:.2f}. "
                    f"Reduce DELTA_IC_LOTS (now {LOTS}).")
             print(msg)
             await tg("error", f"<b>IC abort</b>: {msg}")
             return
-        if net_credit_usd <= 0:
-            msg = f"Iron Condor ABORT: non-positive net credit ${net_credit_usd:.2f}."
+        if net_credit_after_fees <= 0:
+            msg = (f"Iron Condor ABORT: credit ${net_credit_usd:.2f} does not cover "
+                   f"entry brokerage ${fees_in:.2f} (net ${net_credit_after_fees:.2f}).")
             print(msg)
             await tg("error", f"<b>IC abort</b>: {msg}")
             return
@@ -499,6 +530,7 @@ async def cmd_enter() -> None:
             legs=[asdict(l) for l in legs.values()],
             net_credit_usd=net_credit_usd,
             max_loss_usd=max_loss_usd,
+            entry_fees_usd=fees_in,
         )
         save_state(state)
 
@@ -638,15 +670,23 @@ async def cmd_settle() -> None:
         spot_settle = await _settlement_spot(client, state)
 
     payoff_usd = settle_payoff_usd(state, spot_settle)
-    pnl_usd = state.net_credit_usd + payoff_usd
+    gross_pnl_usd = state.net_credit_usd + payoff_usd
 
-    # Outcome label
+    # Brokerage: entry fees (recompute if an older state lacks the field) +
+    # settlement fees on any ITM leg (OTM legs are free on Delta).
+    fees_in = fnum(getattr(state, "entry_fees_usd", 0.0))
+    if fees_in <= 0:
+        fees_in = entry_fees_usd(state.legs, state.spot_entry, state.lots)
+    fees_settle = settlement_fees_usd(state.legs, spot_settle, state.lots)
+    net_pnl_usd = gross_pnl_usd - fees_in - fees_settle
+
+    # Outcome label (based on gross — where spot landed vs the shorts)
     inside = (
         _leg_strike(state, "short_put") < spot_settle < _leg_strike(state, "short_call")
     )
     if inside:
         outcome = "MAX_WIN"
-    elif -pnl_usd >= state.max_loss_usd * 0.95:
+    elif -gross_pnl_usd >= state.max_loss_usd * 0.95:
         outcome = "MAX_LOSS"
     else:
         outcome = "PARTIAL"
@@ -668,7 +708,11 @@ async def cmd_settle() -> None:
         "net_credit_usd": round(state.net_credit_usd, 4),
         "max_loss_usd": round(state.max_loss_usd, 4),
         "payoff_usd": round(payoff_usd, 4),
-        "pnl_usd": round(pnl_usd, 4),
+        "gross_pnl_usd": round(gross_pnl_usd, 4),
+        "entry_fees_usd": round(fees_in, 4),
+        "settle_fees_usd": round(fees_settle, 4),
+        "net_pnl_usd": round(net_pnl_usd, 4),
+        "pnl_usd": round(net_pnl_usd, 4),   # backward-compat alias = net
         "outcome": outcome,
     }
     append_trade(row)
@@ -725,7 +769,9 @@ async def cmd_status() -> None:
         for l in state.legs:
             print(f"  {l['role']:11s} {l['side']:4s} {l['option_type']:4s} "
                   f"K={l['strike']:>8.0f}  {l['symbol']}  @ {l['price_per_btc']}")
-        print(f"  net credit ${state.net_credit_usd:.2f}   max loss ${state.max_loss_usd:.2f}")
+        fees_in = fnum(getattr(state, "entry_fees_usd", 0.0))
+        print(f"  net credit ${state.net_credit_usd:.2f}   entry fees ${fees_in:.2f}   "
+              f"net-of-fees ${state.net_credit_usd - fees_in:.2f}   max loss ${state.max_loss_usd:.2f}")
     # quick connectivity check
     try:
         async with DeltaClient.from_env() as client:
@@ -746,7 +792,9 @@ def _print_entry(state: CondorState, legs: dict[str, Leg]) -> None:
     for role in ("short_call", "long_call", "short_put", "long_put"):
         l = legs[role]
         print(f"  {role:11s} {l.side:4s} K={l.strike:>8.0f}  @ ${l.price_per_btc:>8.2f}/btc  {l.symbol}")
-    print(f"  NET CREDIT ${state.net_credit_usd:.2f}   MAX LOSS ${state.max_loss_usd:.2f}")
+    fees_in = fnum(getattr(state, "entry_fees_usd", 0.0))
+    print(f"  GROSS CREDIT ${state.net_credit_usd:.2f}   ENTRY FEES ${fees_in:.2f}   "
+          f"NET CREDIT ${state.net_credit_usd - fees_in:.2f}   MAX LOSS ${state.max_loss_usd:.2f}")
     print("=" * 64)
 
 
@@ -759,7 +807,8 @@ def _entry_telegram(state: CondorState, legs: dict[str, Leg]) -> str:
         f"SELL call <code>{legs['short_call'].strike:.0f}</code>  /  SELL put <code>{legs['short_put'].strike:.0f}</code>",
         f"BUY  call <code>{legs['long_call'].strike:.0f}</code>  /  BUY  put <code>{legs['long_put'].strike:.0f}</code>",
         "",
-        f"Net credit <b>${state.net_credit_usd:.2f}</b> · max loss ${state.max_loss_usd:.2f}",
+        f"Credit <b>${state.net_credit_usd:.2f}</b> − fees ${fnum(getattr(state,'entry_fees_usd',0.0)):.2f} "
+        f"= net <b>${state.net_credit_usd - fnum(getattr(state,'entry_fees_usd',0.0)):.2f}</b> · max loss ${state.max_loss_usd:.2f}",
         f"Win if {state.underlying} settles between "
         f"{legs['short_put'].strike:.0f} and {legs['short_call'].strike:.0f}.",
     ]
@@ -767,26 +816,30 @@ def _entry_telegram(state: CondorState, legs: dict[str, Leg]) -> str:
 
 
 def _print_settle(row: dict) -> None:
+    fees = fnum(row.get("entry_fees_usd")) + fnum(row.get("settle_fees_usd"))
     print("=" * 64)
     print(f"IRON CONDOR SETTLED [{row['mode'].upper()}]  {row['underlying']} exp {row['expiry']}")
     print(f"  spot entry ${row['spot_entry']:,.0f}  ->  settle ${row['spot_settle']:,.0f}")
-    print(f"  net credit ${row['net_credit_usd']:.2f}  payoff ${row['payoff_usd']:.2f}")
-    print(f"  P&L ${row['pnl_usd']:+.2f}   outcome {row['outcome']}")
+    print(f"  gross P&L ${fnum(row.get('gross_pnl_usd')):+.2f}  fees ${fees:.2f}  "
+          f"NET P&L ${row['net_pnl_usd']:+.2f}   outcome {row['outcome']}")
     print("=" * 64)
 
 
 def _settle_telegram(row: dict) -> str:
     tag = "🧪 PAPER" if row["mode"] == "paper" else "🔴 LIVE"
     emoji = {"MAX_WIN": "✅", "PARTIAL": "🟡", "MAX_LOSS": "🔴"}.get(row["outcome"], "")
-    sign = "+" if row["pnl_usd"] >= 0 else ""
+    net = fnum(row.get("net_pnl_usd"))
+    fees = fnum(row.get("entry_fees_usd")) + fnum(row.get("settle_fees_usd"))
+    sign = "+" if net >= 0 else ""
+    net_inr = net * FX_INR_USD
     lines = [
         f"<b>Iron Condor settled</b> {tag} {emoji}",
         f"{row['underlying']} · exp {row['expiry']}",
         f"spot ${row['spot_entry']:,.0f} → <b>${row['spot_settle']:,.0f}</b>",
         f"shorts {row['short_put_k']:.0f}–{row['short_call_k']:.0f}",
         "",
-        f"P&L <b>{sign}${row['pnl_usd']:.2f}</b>  ({row['outcome']})",
-        f"credit ${row['net_credit_usd']:.2f} · payoff ${row['payoff_usd']:.2f}",
+        f"Net P&L <b>{sign}${net:.2f}</b> (₹{net_inr:+,.0f})  ({row['outcome']})",
+        f"gross ${fnum(row.get('gross_pnl_usd')):+.2f} − fees ${fees:.2f}",
     ]
     return "\n".join(lines)
 
