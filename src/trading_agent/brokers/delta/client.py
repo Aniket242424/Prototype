@@ -142,44 +142,119 @@ class DeltaClient:
         return data
 
     async def get_spot_price(self, symbol: str = "BTCUSD") -> float:
-        """Convenience: return float close/mark price."""
+        """Convenience: return float mark/close/last price. Raises if none present."""
         t = await self.get_ticker(symbol)
-        # Delta returns mark_price or close
-        return float(t.get("mark_price") or t.get("close") or t["last_price"])
+        price = t.get("mark_price") or t.get("close") or t.get("last_price")
+        if price in (None, "", 0, "0", "0.0"):
+            raise DeltaError(0, "no_price", f"No usable price field in ticker for {symbol}: {t}")
+        return float(price)
 
-    async def get_products(self, contract_type: str = "call_options") -> list[dict]:
+    async def get_products(
+        self,
+        contract_type: str = "call_options",
+        state: str | None = "live",
+    ) -> list[dict]:
         """
-        List all active products of a given type.
-        contract_type: 'call_options' | 'put_options' | 'perpetual_futures' etc.
+        List products. NOTE: Delta India ignores `contract_type` server-side and
+        returns the full catalogue regardless (verified 2026-06-03); we keep the
+        param for API parity but callers must filter the result themselves.
+
+        state: 'live' (default, currently-tradeable) or None to omit the filter
+               (needed to find a contract AFTER it has settled/expired).
         """
-        data = await self._request("GET", "/v2/products", params={
-            "contract_type": contract_type,
-            "state": "live",
-        })
+        params: dict = {"contract_type": contract_type}
+        if state:
+            params["state"] = state
+        data = await self._request("GET", "/v2/products", params=params)
         return data if isinstance(data, list) else data.get("products", [])
+
+    async def get_product_by_symbol(self, symbol: str) -> dict | None:
+        """
+        Find a single product by exact symbol across ALL states (no state filter),
+        so it works for settled/expired contracts too. Returns None if not found.
+        """
+        products = await self.get_products("call_options", state=None)
+        for p in products:
+            if p.get("symbol") == symbol:
+                return p
+        return None
 
     async def get_option_chain(
         self,
-        underlying: str = "BTCUSD",
+        underlying: str = "BTC",
         expiry_date: str | None = None,
     ) -> list[dict]:
         """
-        Fetch the full option chain (calls + puts) for a given underlying
-        and expiry date string (e.g. '040626' for 04 Jun 26).
-        Returns list of product dicts with current mark_price, bid, ask, iv.
+        Fetch the daily/weekly option chain (calls + puts) for an underlying.
+
+        IMPORTANT: Delta India's /v2/products endpoint ignores the
+        `contract_type` query param and returns ALL ~1200 products in one
+        list (verified live 2026-06-03). It also includes unrelated product
+        families ('MV-' move options, perpetuals like 'BTCUSD'). We therefore
+        fetch ONCE and filter strictly by the daily-option symbol grammar:
+
+            C-<UNDERLYING>-<STRIKE>-<DDMMYY>   (call)
+            P-<UNDERLYING>-<STRIKE>-<DDMMYY>   (put)
+
+        e.g. 'C-BTC-67400-040626' = BTC 67400 call expiring 04 Jun 26.
+
+        Args:
+            underlying: asset token used in the symbol, e.g. 'BTC' or 'ETH'
+                        (NOT 'BTCUSD' — that's the perp).
+            expiry_date: optional 'DDMMYY' string to filter a single expiry.
+
+        Returns each matching product enriched with parsed fields:
+            option_type: 'call' | 'put'
+            strike: float
+            expiry: 'DDMMYY' str
+        plus the raw product dict (id, symbol, settlement_time, contract_value...).
         """
-        calls = await self.get_products("call_options")
-        puts = await self.get_products("put_options")
-        products = calls + puts
-        # Filter by underlying
-        filtered = [
-            p for p in products
-            if p.get("underlying_asset", {}).get("symbol", "").upper() == underlying.upper()
-            or underlying.upper() in p.get("symbol", "").upper()
-        ]
-        if expiry_date:
-            filtered = [p for p in filtered if expiry_date in p.get("symbol", "")]
-        return filtered
+        # One fetch returns the full catalogue (filter param is ignored server-side).
+        products = await self.get_products("call_options")
+        out: list[dict] = []
+        for p in products:
+            sym = p.get("symbol", "")
+            parts = sym.split("-")
+            if len(parts) != 4:
+                continue
+            kind, under, strike_str, exp = parts
+            if kind not in ("C", "P"):
+                continue
+            if under.upper() != underlying.upper():
+                continue
+            # Expiry must be a well-formed DDMMYY (6 digits); skip anything else
+            # so a malformed symbol can never crash the date math downstream.
+            if not (len(exp) == 6 and exp.isdigit()):
+                continue
+            if expiry_date and exp != expiry_date:
+                continue
+            try:
+                strike = float(p.get("strike_price") or strike_str)
+            except (TypeError, ValueError):
+                continue
+            if strike <= 0:
+                continue
+            out.append({
+                **p,
+                "option_type": "call" if kind == "C" else "put",
+                "strike": strike,
+                "expiry": exp,
+            })
+        return out
+
+    async def list_expiries(self, underlying: str = "BTC") -> list[str]:
+        """
+        Return the sorted-by-date list of available 'DDMMYY' expiry strings
+        for an underlying's daily/weekly options.
+        """
+        chain = await self.get_option_chain(underlying)
+        expiries = {p["expiry"] for p in chain}
+
+        def _key(ddmmyy: str) -> tuple[int, int, int]:
+            d, m, y = int(ddmmyy[0:2]), int(ddmmyy[2:4]), int(ddmmyy[4:6])
+            return (y, m, d)
+
+        return sorted(expiries, key=_key)
 
     async def get_option_ticker(self, symbol: str) -> dict:
         """Get bid/ask/mark/iv for a specific option symbol."""
