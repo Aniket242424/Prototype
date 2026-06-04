@@ -348,7 +348,7 @@ def _render_open(state: dict, live: dict) -> str:
         </div>
         <div class="opbox"><div class="opk">Net Credit (max profit)</div>
           <div class="opv pos">${credit-fees_in:,.2f}</div>
-          <div class="opsub">{_inr(credit-fees_in)} · credit ${credit:.2f} − fees ${fees_in:.2f}</div></div>
+          <div class="opsub">{_inr(credit-fees_in)} · credit ${credit:.2f} − fees ${fees_in:.2f} ({_inr(fees_in)})</div></div>
         <div class="opbox"><div class="opk">Max Loss</div>
           <div class="opv neg">−${maxloss:,.2f}</div><div class="opsub">−{_inr(maxloss)}</div></div>
         <div class="opbox"><div class="opk">Status</div>
@@ -384,13 +384,14 @@ def _render_history(trades: list[dict]) -> str:
         rows += (f"<tr><td>{date}</td><td>{t.get('expiry','')}</td>"
                  f"<td>{fnum(t.get('spot_entry')):,.0f}→{fnum(t.get('spot_settle')):,.0f}</td>"
                  f"<td>{fnum(t.get('short_put_k')):,.0f}–{fnum(t.get('short_call_k')):,.0f}</td>"
-                 f"<td>{gross:+.2f}</td><td>{fees:.2f}</td>"
+                 f"<td>{gross:+.2f}</td>"
+                 f"<td>${fees:.2f} <span style='color:#9b9b9b;font-size:10px'>₹{fees*FX:,.0f}</span></td>"
                  f"<td class='{_money_class(net)}'>{net:+.2f}</td>"
                  f"<td><span class='oc {badge}'>{oc}</span></td></tr>")
     return f"""
     <div class="panel"><div class="panel-title">History <span class="muted">· {len(settled)} settled</span></div>
       <table class="hist"><thead><tr><th>date</th><th>exp</th><th>spot</th><th>shorts</th>
-        <th>gross $</th><th>fees $</th><th>net $</th><th>outcome</th></tr></thead>
+        <th>gross $</th><th>fees $/₹</th><th>net $</th><th>outcome</th></tr></thead>
         <tbody>{rows}</tbody></table></div>"""
 
 
