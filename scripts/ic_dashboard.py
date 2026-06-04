@@ -293,6 +293,11 @@ def _render_open(state: dict, live: dict) -> str:
     entry_spot = fnum(state.get("spot_entry"))
     credit = fnum(state.get("net_credit_usd"))
     fees_in = fnum(state.get("entry_fees_usd"))
+    if fees_in <= 0:  # position predates fee recording — estimate from the legs
+        try:
+            fees_in = entry_fees_usd(state["legs"], fnum(state.get("spot_entry")), int(state.get("lots", 0)))
+        except Exception:
+            fees_in = 0.0
     maxloss = fnum(state.get("max_loss_usd"))
     mtm = fnum(live.get("mtm_gross_usd"))
     mtm_net = mtm  # entry fees already sunk; this is unrealized change since entry
