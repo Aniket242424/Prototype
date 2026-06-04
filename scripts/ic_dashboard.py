@@ -242,6 +242,7 @@ def render(state, live, trades, stats) -> str:
 </main>
 <script>
 const INITIAL_KEY = {json.dumps(open_key)};
+const FX = {FX};
 function flash(el, up){{ if(!el) return; el.classList.remove('up','down'); void el.offsetWidth;
   el.classList.add(up ? 'up' : 'down'); }}
 function setNum(id, txt, val, prev){{ const el=document.getElementById(id); if(!el) return;
@@ -270,9 +271,11 @@ async function poll(){{
     const mk=document.getElementById('spot-marker'); if(mk && d.spot_pct!=null) mk.style.left=d.spot_pct+'%';
     (d.legs||[]).forEach(l=>{{
       const m=document.getElementById('mark-'+l.role); if(m) m.textContent=l.mark.toFixed(1);
+      const sign=l.leg_pnl>=0?'+':''; const cls=l.leg_pnl>0?'pos':(l.leg_pnl<0?'neg':'zero');
       const p=document.getElementById('pnl-'+l.role);
-      if(p){{ const sign=l.leg_pnl>=0?'+':''; p.textContent=sign+l.leg_pnl.toFixed(3);
-        p.className=l.leg_pnl>0?'pos':(l.leg_pnl<0?'neg':'zero'); }}
+      if(p){{ p.textContent=sign+l.leg_pnl.toFixed(3); p.className=cls; }}
+      const pr=document.getElementById('pnlinr-'+l.role);
+      if(pr){{ pr.textContent=sign+'₹'+Math.round(l.leg_pnl*FX).toLocaleString(); pr.className=cls; }}
     }});
     const ab=document.getElementById('api-badge'); if(ab) ab.innerHTML = d.ok?"<span class='dot ok'></span>live":"<span class='dot bad'></span>API down";
   }}catch(e){{}}
@@ -321,10 +324,12 @@ def _render_open(state: dict, live: dict) -> str:
         mark = fnum(l.get("mark"), fnum(l.get("price_per_btc")))
         lpnl = fnum(l.get("leg_pnl"))
         side = l["side"].upper()
+        lpnl_inr = lpnl * FX
         leg_rows += (f"<tr><td>{role.replace('_',' ')}</td><td class='{'sell' if side=='SELL' else 'buy'}'>{side}</td>"
                      f"<td>{fnum(l['strike']):,.0f}</td><td>{fnum(l.get('price_per_btc')):.1f}</td>"
                      f"<td id='mark-{role}'>{mark:.1f}</td>"
-                     f"<td id='pnl-{role}' class='{_money_class(lpnl)}'>{lpnl:+.3f}</td></tr>")
+                     f"<td id='pnl-{role}' class='{_money_class(lpnl)}'>{lpnl:+.3f}</td>"
+                     f"<td id='pnlinr-{role}' class='{_money_class(lpnl)}'>{'+' if lpnl>=0 else ''}₹{lpnl_inr:,.0f}</td></tr>")
 
     return f"""
     <div class="panel">
@@ -337,10 +342,10 @@ def _render_open(state: dict, live: dict) -> str:
           <div class="opsub {_money_class(mtm_net)}" id="mtm-inr">{('+' if mtm_net>=0 else '')}{_inr(mtm_net)}</div>
         </div>
         <div class="opbox"><div class="opk">Net Credit (max profit)</div>
-          <div class="opv pos">{_inr(credit-fees_in)}</div>
-          <div class="opsub">${credit-fees_in:,.2f} · credit ${credit:.2f} − fees ${fees_in:.2f}</div></div>
+          <div class="opv pos">${credit-fees_in:,.2f}</div>
+          <div class="opsub">{_inr(credit-fees_in)} · credit ${credit:.2f} − fees ${fees_in:.2f}</div></div>
         <div class="opbox"><div class="opk">Max Loss</div>
-          <div class="opv neg">−{_inr(maxloss)}</div><div class="opsub">−${maxloss:,.2f}</div></div>
+          <div class="opv neg">−${maxloss:,.2f}</div><div class="opsub">−{_inr(maxloss)}</div></div>
         <div class="opbox"><div class="opk">Status</div>
           <div class="opv" id="status-label">{"<span class='pos'>IN ZONE ✓</span>" if in_zone else "<span class='neg'>OUT OF ZONE</span>"}</div>
           <div class="opsub" id="status-spot">spot ${spot:,.0f}</div></div>
@@ -354,7 +359,7 @@ def _render_open(state: dict, live: dict) -> str:
         </div>
         <div class="zoneends"><span>{lp:,.0f} (long put)</span><span>{lc:,.0f} (long call)</span></div>
       </div>
-      <table class="legs"><thead><tr><th>leg</th><th>side</th><th>strike</th><th>entry</th><th>mark</th><th>leg P&amp;L $</th></tr></thead>
+      <table class="legs"><thead><tr><th>leg</th><th>side</th><th>strike</th><th>entry</th><th>mark</th><th>leg P&amp;L $</th><th>leg P&amp;L ₹</th></tr></thead>
         <tbody>{leg_rows}</tbody></table>
     </div>"""
 
