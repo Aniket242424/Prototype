@@ -20,6 +20,7 @@ import csv
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -103,6 +104,55 @@ async def gather_live(state: dict | None) -> dict:
     return out
 
 
+# Server-side cache so rapid polling (every ~2s, possibly many viewers) doesn't
+# hammer the Delta API. One live fetch is shared for up to LIVE_TTL seconds.
+_live_cache = {"t": 0.0, "data": None}
+LIVE_TTL = 2.0
+
+
+def get_live_cached(state: dict | None) -> dict:
+    now = time.monotonic()
+    if _live_cache["data"] is not None and (now - _live_cache["t"]) < LIVE_TTL:
+        return _live_cache["data"]
+    data = asyncio.run(gather_live(state))
+    _live_cache["t"] = now
+    _live_cache["data"] = data
+    return data
+
+
+def _zone_pct(x, lp, lc):
+    span = max(lc - lp, 1.0)
+    return max(0.0, min(100.0, (x - lp) / span * 100.0))
+
+
+def live_payload(state: dict | None, live: dict) -> dict:
+    """Compact JSON for the 2s poller — spot, MTM, per-leg marks, zone marker."""
+    spot = live.get("spot")
+    p = {
+        "ok": bool(live.get("api_ok")),
+        "spot": spot,
+        "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "open_key": None, "mtm_usd": None, "mtm_inr": None,
+        "in_zone": None, "spot_pct": None, "legs": [],
+    }
+    if state and spot:
+        legs = {l["role"]: l for l in state["legs"]}
+        sp = fnum(legs["short_put"]["strike"]); sc = fnum(legs["short_call"]["strike"])
+        lp = fnum(legs["long_put"]["strike"]); lc = fnum(legs["long_call"]["strike"])
+        mtm = fnum(live.get("mtm_gross_usd"))
+        p["open_key"] = f"{state.get('expiry')}|{state.get('entry_ts')}"
+        p["mtm_usd"] = round(mtm, 3)
+        p["mtm_inr"] = round(mtm * FX, 0)
+        p["in_zone"] = bool(sp < spot < sc)
+        p["spot_pct"] = round(_zone_pct(spot, lp, lc), 2)
+        p["legs"] = [
+            {"role": x["role"], "mark": round(fnum(x.get("mark")), 1),
+             "leg_pnl": round(fnum(x.get("leg_pnl")), 3)}
+            for x in live.get("legs_mtm", [])
+        ]
+    return p
+
+
 def compute_stats(trades: list[dict]) -> dict:
     settled = [t for t in trades if t.get("outcome")]
     n = len(settled)
@@ -169,8 +219,9 @@ def render(state, live, trades, stats) -> str:
     # ---- history ----
     hist_html = _render_history(trades)
 
+    open_key = f"{state.get('expiry')}|{state.get('entry_ts')}" if state else "none"
     return f"""<!DOCTYPE html><html lang="en"><head>
-<meta charset="utf-8"/><meta http-equiv="refresh" content="30"/>
+<meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Iron Condor — Delta India</title>
 <style>{CSS}</style></head><body>
@@ -178,17 +229,56 @@ def render(state, live, trades, stats) -> str:
   <div class="brand">Iron Condor <span class="muted">· Delta India</span></div>
   <div class="hmeta">
     <span class="badge paper">PAPER</span>
-    <span class="sep">BTC {spot_str}</span>
-    <span class="sep">{api_badge}</span>
-    <span class="muted">updated {now}</span>
+    <span class="sep">BTC <span id="hdr-spot">{spot_str}</span></span>
+    <span class="sep" id="api-badge">{api_badge}</span>
+    <span class="muted">live <span id="live-ts">{now[11:]}</span></span>
   </div>
 </header>
 <main>
   {cards}
   {open_html}
   {hist_html}
-  <div class="foot">Fees: Delta 0.01% notional (cap 3.5% premium) + 18% GST; OTM legs free. ₹ at {FX:.0f}/$. Auto-refresh 30s.</div>
+  <div class="foot">Fees: Delta 0.01% notional (cap 3.5% premium) + 18% GST; OTM legs free. ₹ at {FX:.0f}/$. Live prices every 2s.</div>
 </main>
+<script>
+const INITIAL_KEY = {json.dumps(open_key)};
+function flash(el, up){{ if(!el) return; el.classList.remove('up','down'); void el.offsetWidth;
+  el.classList.add(up ? 'up' : 'down'); }}
+function setNum(id, txt, val, prev){{ const el=document.getElementById(id); if(!el) return;
+  if(el.textContent!==txt){{ flash(el, val>=prev); el.textContent=txt; }} }}
+let last={{}};
+async function poll(){{
+  try{{
+    const r = await fetch('/api/live',{{cache:'no-store'}}); const d = await r.json();
+    if(d.open_key !== INITIAL_KEY){{ location.reload(); return; }}
+    const ts=document.getElementById('live-ts'); if(ts) ts.textContent=d.ts;
+    if(d.spot!=null){{
+      const s='$'+Math.round(d.spot).toLocaleString();
+      setNum('hdr-spot', s, d.spot, last.spot||d.spot);
+      const ss=document.getElementById('status-spot'); if(ss) ss.textContent='spot $'+Math.round(d.spot).toLocaleString();
+      last.spot=d.spot;
+    }}
+    if(d.mtm_usd!=null){{
+      const mv=document.getElementById('mtm-usd'); const mi=document.getElementById('mtm-inr');
+      const sign=d.mtm_usd>=0?'+':''; const cls=d.mtm_usd>0?'pos':(d.mtm_usd<0?'neg':'zero');
+      if(mv){{ flash(mv, d.mtm_usd>=(last.mtm||0)); mv.textContent=sign+'$'+d.mtm_usd.toFixed(3); mv.className='opv '+cls; }}
+      if(mi){{ mi.textContent=sign+'₹'+Math.round(d.mtm_inr).toLocaleString(); mi.className='opsub '+cls; }}
+      last.mtm=d.mtm_usd;
+    }}
+    const st=document.getElementById('status-label');
+    if(st && d.in_zone!=null){{ st.innerHTML = d.in_zone? "<span class='pos'>IN ZONE ✓</span>":"<span class='neg'>OUT OF ZONE</span>"; }}
+    const mk=document.getElementById('spot-marker'); if(mk && d.spot_pct!=null) mk.style.left=d.spot_pct+'%';
+    (d.legs||[]).forEach(l=>{{
+      const m=document.getElementById('mark-'+l.role); if(m) m.textContent=l.mark.toFixed(1);
+      const p=document.getElementById('pnl-'+l.role);
+      if(p){{ const sign=l.leg_pnl>=0?'+':''; p.textContent=sign+l.leg_pnl.toFixed(3);
+        p.className=l.leg_pnl>0?'pos':(l.leg_pnl<0?'neg':'zero'); }}
+    }});
+    const ab=document.getElementById('api-badge'); if(ab) ab.innerHTML = d.ok?"<span class='dot ok'></span>live":"<span class='dot bad'></span>API down";
+  }}catch(e){{}}
+}}
+setInterval(poll, 2000); poll();
+</script>
 </body></html>"""
 
 
@@ -233,7 +323,8 @@ def _render_open(state: dict, live: dict) -> str:
         side = l["side"].upper()
         leg_rows += (f"<tr><td>{role.replace('_',' ')}</td><td class='{'sell' if side=='SELL' else 'buy'}'>{side}</td>"
                      f"<td>{fnum(l['strike']):,.0f}</td><td>{fnum(l.get('price_per_btc')):.1f}</td>"
-                     f"<td>{mark:.1f}</td><td class='{_money_class(lpnl)}'>{lpnl:+.3f}</td></tr>")
+                     f"<td id='mark-{role}'>{mark:.1f}</td>"
+                     f"<td id='pnl-{role}' class='{_money_class(lpnl)}'>{lpnl:+.3f}</td></tr>")
 
     return f"""
     <div class="panel">
@@ -242,23 +333,24 @@ def _render_open(state: dict, live: dict) -> str:
       <div class="oprow">
         <div class="opbox">
           <div class="opk">Unrealized P&amp;L (live)</div>
-          <div class="opv {_money_class(mtm_net)}">{('+' if mtm_net>=0 else '')}${mtm_net:,.3f}</div>
-          <div class="opsub {_money_class(mtm_net)}">{('+' if mtm_net>=0 else '')}{_inr(mtm_net)}</div>
+          <div class="opv {_money_class(mtm_net)}" id="mtm-usd">{('+' if mtm_net>=0 else '')}${mtm_net:,.3f}</div>
+          <div class="opsub {_money_class(mtm_net)}" id="mtm-inr">{('+' if mtm_net>=0 else '')}{_inr(mtm_net)}</div>
         </div>
         <div class="opbox"><div class="opk">Net Credit (max profit)</div>
-          <div class="opv">${credit-fees_in:,.2f}</div><div class="opsub">credit ${credit:.2f} − fees ${fees_in:.2f}</div></div>
+          <div class="opv pos">{_inr(credit-fees_in)}</div>
+          <div class="opsub">${credit-fees_in:,.2f} · credit ${credit:.2f} − fees ${fees_in:.2f}</div></div>
         <div class="opbox"><div class="opk">Max Loss</div>
-          <div class="opv neg">−${maxloss:,.2f}</div><div class="opsub">{_inr(maxloss)}</div></div>
+          <div class="opv neg">−{_inr(maxloss)}</div><div class="opsub">−${maxloss:,.2f}</div></div>
         <div class="opbox"><div class="opk">Status</div>
-          <div class="opv">{"<span class='pos'>IN ZONE ✓</span>" if in_zone else "<span class='neg'>OUT OF ZONE</span>"}</div>
-          <div class="opsub">spot ${spot:,.0f}</div></div>
+          <div class="opv" id="status-label">{"<span class='pos'>IN ZONE ✓</span>" if in_zone else "<span class='neg'>OUT OF ZONE</span>"}</div>
+          <div class="opsub" id="status-spot">spot ${spot:,.0f}</div></div>
       </div>
       <div class="zone">
         <div class="zonebar">
           <div class="profit" style="left:{z0:.1f}%;width:{max(z1-z0,0):.1f}%"></div>
           <div class="tick" style="left:{z0:.1f}%"><span>{sp:,.0f}</span></div>
           <div class="tick" style="left:{z1:.1f}%"><span>{sc:,.0f}</span></div>
-          <div class="spot" style="left:{spot_pct:.1f}%" title="spot {spot:,.0f}"></div>
+          <div class="spot" id="spot-marker" style="left:{spot_pct:.1f}%" title="spot {spot:,.0f}"></div>
         </div>
         <div class="zoneends"><span>{lp:,.0f} (long put)</span><span>{lc:,.0f} (long call)</span></div>
       </div>
@@ -329,7 +421,11 @@ main{padding:18px 22px;max-width:1100px;margin:0 auto}
 .zonebar .profit{position:absolute;top:0;height:100%;background:var(--green-soft);border-left:2px solid var(--green);border-right:2px solid var(--green)}
 .zonebar .tick{position:absolute;top:0;height:100%;border-left:1px dashed #bbb}
 .zonebar .tick span{position:absolute;top:-18px;left:-18px;font-size:10px;color:var(--muted)}
-.zonebar .spot{position:absolute;top:-4px;width:3px;height:38px;background:var(--accent);border-radius:2px}
+.zonebar .spot{position:absolute;top:-4px;width:3px;height:38px;background:var(--accent);border-radius:2px;transition:left .6s ease-out}
+@keyframes flup{0%{background:rgba(0,168,107,.22)}100%{background:transparent}}
+@keyframes fldn{0%{background:rgba(239,83,80,.22)}100%{background:transparent}}
+.up{animation:flup .6s ease-out}.down{animation:fldn .6s ease-out}
+#hdr-spot{font-weight:700;color:var(--strong);border-radius:3px;padding:0 2px}
 .zoneends{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:20px}
 table{width:100%;border-collapse:collapse;font-size:12px}
 th{text-align:left;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--border);text-transform:uppercase;font-size:10px}
@@ -351,24 +447,34 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # quiet
         pass
 
+    def _send(self, body: bytes, ctype: str, code: int = 200):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path not in ("/", "/dashboard", "/index.html"):
-            self.send_response(404); self.end_headers(); return
+        path = self.path.split("?")[0]
         try:
-            state = load_state()
-            trades = load_trades()
-            live = asyncio.run(gather_live(state))
-            stats = compute_stats(trades)
-            html = render(state, live, trades, stats)
-            body = html.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            if path == "/api/live":
+                state = load_state()
+                live = get_live_cached(state)
+                payload = live_payload(state, live)
+                self._send(json.dumps(payload).encode(), "application/json")
+                return
+            if path in ("/", "/dashboard", "/index.html"):
+                state = load_state()
+                trades = load_trades()
+                live = get_live_cached(state)
+                stats = compute_stats(trades)
+                html = render(state, live, trades, stats)
+                self._send(html.encode("utf-8"), "text/html; charset=utf-8")
+                return
+            self.send_response(404); self.end_headers()
         except Exception as e:
-            msg = f"dashboard error: {e}".encode()
-            self.send_response(500); self.end_headers(); self.wfile.write(msg)
+            self._send(f"dashboard error: {e}".encode(), "text/plain", 500)
 
 
 def main():
