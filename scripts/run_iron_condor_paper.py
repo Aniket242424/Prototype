@@ -107,8 +107,13 @@ except Exception:  # pragma: no cover - allow standalone runs
 # ============================================================
 UNDERLYING = os.getenv("DELTA_IC_UNDERLYING", "BTC").upper()
 PERP_SYMBOL = f"{UNDERLYING}USD"          # spot reference, e.g. BTCUSD
-SHORT_PCT = 0.015
-LONG_PCT = 0.040
+
+# Strategy variant — lets us paper-test more than one structure side by side.
+# "standard" = ±1.5% short / ±4% wings; "narrow" = ±1% short / ±3% wings.
+# Strikes are env-overridable so a cron can run a second variant in parallel.
+VARIANT = os.getenv("DELTA_IC_VARIANT", "standard").lower()
+SHORT_PCT = float(os.getenv("DELTA_IC_SHORT_PCT", "0.015"))
+LONG_PCT = float(os.getenv("DELTA_IC_LONG_PCT", "0.040"))
 LOTS = int(os.getenv("DELTA_IC_LOTS", "10"))
 MAX_RISK_USD = float(os.getenv("DELTA_IC_MAX_RISK_USD", "25"))
 CONTRACT_VALUE_DEFAULT = 0.001            # BTC per lot (read live per product)
@@ -124,8 +129,11 @@ PAPER = os.getenv("DELTA_PAPER", "true").lower() != "false"
 LIVE_GATE = os.getenv("LIVE_TRADING", "false").lower() == "true"
 IS_LIVE = (not PAPER) and LIVE_GATE
 
-STATE_FILE = Path("data/iron_condor_state.json")
-TRADES_CSV = Path("data/iron_condor_trades.csv")
+# "standard" keeps the original file names (preserves the running track's
+# history); any other variant gets its own namespaced files.
+_SUFFIX = "" if VARIANT == "standard" else f"_{VARIANT}"
+STATE_FILE = Path(f"data/iron_condor_state{_SUFFIX}.json")
+TRADES_CSV = Path(f"data/iron_condor_trades{_SUFFIX}.csv")
 CSV_FIELDS = [
     "entry_ts", "settle_ts", "underlying", "expiry", "mode",
     "spot_entry", "spot_settle", "lots", "contract_value",
@@ -801,7 +809,7 @@ def _print_entry(state: CondorState, legs: dict[str, Leg]) -> None:
 def _entry_telegram(state: CondorState, legs: dict[str, Leg]) -> str:
     tag = "🧪 PAPER" if state.mode == "paper" else "🔴 LIVE"
     lines = [
-        f"<b>Iron Condor entered</b> {tag}",
+        f"<b>Iron Condor entered</b> [{VARIANT}] {tag}",
         f"{state.underlying} · exp {state.expiry} · spot ${state.spot_entry:,.0f} · {state.lots} lots",
         "",
         f"SELL call <code>{legs['short_call'].strike:.0f}</code>  /  SELL put <code>{legs['short_put'].strike:.0f}</code>",
@@ -833,7 +841,7 @@ def _settle_telegram(row: dict) -> str:
     sign = "+" if net >= 0 else ""
     net_inr = net * FX_INR_USD
     lines = [
-        f"<b>Iron Condor settled</b> {tag} {emoji}",
+        f"<b>Iron Condor settled</b> [{VARIANT}] {tag} {emoji}",
         f"{row['underlying']} · exp {row['expiry']}",
         f"spot ${row['spot_entry']:,.0f} → <b>${row['spot_settle']:,.0f}</b>",
         f"shorts {row['short_put_k']:.0f}–{row['short_call_k']:.0f}",
@@ -854,7 +862,8 @@ async def _amain() -> None:
                         help="enter = open condor, settle = close+report, status = show state")
     args = parser.parse_args()
 
-    print(f"[{iso(now_utc())}] iron_condor {args.command}  "
+    print(f"[{iso(now_utc())}] iron_condor[{VARIANT}] {args.command}  "
+          f"strikes ±{SHORT_PCT*100:.2f}%/±{LONG_PCT*100:.1f}%  "
           f"mode={'LIVE' if IS_LIVE else 'PAPER'}  "
           f"(DELTA_PAPER={PAPER} LIVE_TRADING={LIVE_GATE})")
 

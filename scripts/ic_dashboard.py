@@ -40,8 +40,18 @@ PERP = (os.getenv("DELTA_IC_UNDERLYING", "BTC").upper()) + "USD"
 CAPITAL_INR = float(os.getenv("DELTA_IC_CAPITAL_INR", "200000"))
 FX = float(os.getenv("DELTA_IC_FX_INR_USD", "84"))
 CAPITAL_USD = CAPITAL_INR / FX
-STATE_FILE = Path("data/iron_condor_state.json")
-TRADES_CSV = Path("data/iron_condor_trades.csv")
+
+# Variants we can view (label -> file suffix). "standard" uses the original
+# un-suffixed files; others are namespaced (must match the runner).
+VARIANTS = {"standard": "", "narrow": "_narrow"}
+
+
+def state_file(variant: str) -> Path:
+    return Path(f"data/iron_condor_state{VARIANTS.get(variant, '')}.json")
+
+
+def trades_file(variant: str) -> Path:
+    return Path(f"data/iron_condor_trades{VARIANTS.get(variant, '')}.csv")
 
 
 # ============================================================
@@ -55,20 +65,22 @@ def fnum(x, d=0.0):
         return d
 
 
-def load_state() -> dict | None:
-    if not STATE_FILE.exists():
+def load_state(variant: str = "standard") -> dict | None:
+    f = state_file(variant)
+    if not f.exists():
         return None
     try:
-        return json.loads(STATE_FILE.read_text())
+        return json.loads(f.read_text())
     except Exception:
         return None
 
 
-def load_trades() -> list[dict]:
-    if not TRADES_CSV.exists():
+def load_trades(variant: str = "standard") -> list[dict]:
+    f = trades_file(variant)
+    if not f.exists():
         return []
     try:
-        return list(csv.DictReader(open(TRADES_CSV, newline="", encoding="utf-8")))
+        return list(csv.DictReader(open(f, newline="", encoding="utf-8")))
     except Exception:
         return []
 
@@ -104,19 +116,19 @@ async def gather_live(state: dict | None) -> dict:
     return out
 
 
-# Server-side cache so rapid polling (every ~2s, possibly many viewers) doesn't
-# hammer the Delta API. One live fetch is shared for up to LIVE_TTL seconds.
-_live_cache = {"t": 0.0, "data": None}
+# Server-side cache (per variant) so rapid polling (every ~2s, possibly many
+# viewers) doesn't hammer the Delta API. Shared for up to LIVE_TTL seconds.
+_live_cache: dict[str, dict] = {}
 LIVE_TTL = 2.0
 
 
-def get_live_cached(state: dict | None) -> dict:
+def get_live_cached(state: dict | None, variant: str = "standard") -> dict:
     now = time.monotonic()
-    if _live_cache["data"] is not None and (now - _live_cache["t"]) < LIVE_TTL:
-        return _live_cache["data"]
+    c = _live_cache.get(variant)
+    if c is not None and (now - c["t"]) < LIVE_TTL:
+        return c["data"]
     data = asyncio.run(gather_live(state))
-    _live_cache["t"] = now
-    _live_cache["data"] = data
+    _live_cache[variant] = {"t": now, "data": data}
     return data
 
 
@@ -176,6 +188,15 @@ def compute_stats(trades: list[dict]) -> dict:
 # Rendering
 # ============================================================
 
+def _variant_toggle(active: str) -> str:
+    labels = {"standard": "Standard ±1.5/4", "narrow": "Narrow ±1/3"}
+    out = []
+    for v, lbl in labels.items():
+        cls = "vt on" if v == active else "vt"
+        out.append(f"<a class='{cls}' href='/?variant={v}'>{lbl}</a>")
+    return "".join(out)
+
+
 def _money_class(v: float) -> str:
     return "pos" if v > 0 else ("neg" if v < 0 else "zero")
 
@@ -184,7 +205,7 @@ def _inr(usd: float) -> str:
     return f"₹{usd * FX:,.0f}"
 
 
-def render(state, live, trades, stats) -> str:
+def render(state, live, trades, stats, variant="standard") -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     spot = live.get("spot")
     spot_str = f"${spot:,.0f}" if spot else "—"
@@ -226,7 +247,9 @@ def render(state, live, trades, stats) -> str:
 <title>Iron Condor — Delta India</title>
 <style>{CSS}</style></head><body>
 <header>
-  <div class="brand">Iron Condor <span class="muted">· Delta India</span></div>
+  <div class="brand">Iron Condor <span class="muted">· Delta India</span>
+    <span class="vtoggle">{_variant_toggle(variant)}</span>
+  </div>
   <div class="hmeta">
     <span class="badge paper">PAPER</span>
     <span class="sep">BTC <span id="hdr-spot">{spot_str}</span></span>
@@ -243,6 +266,7 @@ def render(state, live, trades, stats) -> str:
 <script>
 const INITIAL_KEY = {json.dumps(open_key)};
 const FX = {FX};
+const VARIANT = {json.dumps(variant)};
 function flash(el, up){{ if(!el) return; el.classList.remove('up','down'); void el.offsetWidth;
   el.classList.add(up ? 'up' : 'down'); }}
 function setNum(id, txt, val, prev){{ const el=document.getElementById(id); if(!el) return;
@@ -250,7 +274,7 @@ function setNum(id, txt, val, prev){{ const el=document.getElementById(id); if(!
 let last={{}};
 async function poll(){{
   try{{
-    const r = await fetch('/api/live',{{cache:'no-store'}}); const d = await r.json();
+    const r = await fetch('/api/live?variant='+VARIANT,{{cache:'no-store'}}); const d = await r.json();
     if(d.open_key !== INITIAL_KEY){{ location.reload(); return; }}
     const ts=document.getElementById('live-ts'); if(ts) ts.textContent=d.ts;
     if(d.spot!=null){{
@@ -405,7 +429,10 @@ CSS = """
 font-family:-apple-system,'Inter','Segoe UI',Roboto,Arial,sans-serif;font-size:13px}
 header{padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--border);
 display:flex;align-items:center;justify-content:space-between}
-.brand{font-size:16px;font-weight:700;color:var(--strong)}
+.brand{font-size:16px;font-weight:700;color:var(--strong);display:flex;align-items:center;gap:12px}
+.vtoggle{display:inline-flex;gap:4px}
+.vt{font-size:11px;font-weight:600;padding:3px 9px;border-radius:5px;text-decoration:none;color:var(--muted);border:1px solid var(--border)}
+.vt.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .muted{color:var(--muted);font-weight:400}
 .hmeta{display:flex;gap:14px;align-items:center;font-size:12px}
 .hmeta .sep{color:var(--strong);font-weight:600}
@@ -468,21 +495,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _variant(self):
+        from urllib.parse import urlparse, parse_qs
+        q = parse_qs(urlparse(self.path).query)
+        v = (q.get("variant", ["standard"])[0]).lower()
+        return v if v in VARIANTS else "standard"
+
     def do_GET(self):
         path = self.path.split("?")[0]
+        variant = self._variant()
         try:
             if path == "/api/live":
-                state = load_state()
-                live = get_live_cached(state)
+                state = load_state(variant)
+                live = get_live_cached(state, variant)
                 payload = live_payload(state, live)
                 self._send(json.dumps(payload).encode(), "application/json")
                 return
             if path in ("/", "/dashboard", "/index.html"):
-                state = load_state()
-                trades = load_trades()
-                live = get_live_cached(state)
+                state = load_state(variant)
+                trades = load_trades(variant)
+                live = get_live_cached(state, variant)
                 stats = compute_stats(trades)
-                html = render(state, live, trades, stats)
+                html = render(state, live, trades, stats, variant)
                 self._send(html.encode("utf-8"), "text/html; charset=utf-8")
                 return
             self.send_response(404); self.end_headers()
