@@ -330,7 +330,9 @@ def _render_open(state: dict, live: dict) -> str:
         lpnl = fnum(l.get("leg_pnl"))
         side = l["side"].upper()
         lpnl_inr = lpnl * FX
+        cv = fnum(l.get("contract_value"), 0.001)
         leg_rows += (f"<tr><td>{role.replace('_',' ')}</td><td class='{'sell' if side=='SELL' else 'buy'}'>{side}</td>"
+                     f"<td>{cv:.3f} BTC</td>"
                      f"<td>{fnum(l['strike']):,.0f}</td><td>{fnum(l.get('price_per_btc')):.1f}</td>"
                      f"<td id='mark-{role}'>{mark:.1f}</td>"
                      f"<td id='pnl-{role}' class='{_money_class(lpnl)}'>{lpnl:+.3f}</td>"
@@ -339,7 +341,7 @@ def _render_open(state: dict, live: dict) -> str:
     return f"""
     <div class="panel">
       <div class="panel-title">Open Position
-        <span class="muted">· {state['underlying']} exp {state['expiry']} · {state['lots']} lots · {countdown}</span></div>
+        <span class="muted">· {state['underlying']} exp {state['expiry']} · {state['lots']} lots × {fnum(legs['short_call'].get('contract_value'),0.001):.3f} = {state['lots']*fnum(legs['short_call'].get('contract_value'),0.001):.3f} BTC · {countdown}</span></div>
       <div class="oprow">
         <div class="opbox">
           <div class="opk">Unrealized P&amp;L (live)</div>
@@ -364,7 +366,7 @@ def _render_open(state: dict, live: dict) -> str:
         </div>
         <div class="zoneends"><span>{lp:,.0f} (long put)</span><span>{lc:,.0f} (long call)</span></div>
       </div>
-      <table class="legs"><thead><tr><th>leg</th><th>side</th><th>strike</th><th>entry</th><th>mark</th><th>leg P&amp;L $</th><th>leg P&amp;L ₹</th></tr></thead>
+      <table class="legs"><thead><tr><th>leg</th><th>side</th><th>lot size</th><th>strike</th><th>entry</th><th>mark</th><th>leg P&amp;L $</th><th>leg P&amp;L ₹</th></tr></thead>
         <tbody>{leg_rows}</tbody></table>
     </div>"""
 
