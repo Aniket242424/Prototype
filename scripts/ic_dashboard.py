@@ -214,6 +214,11 @@ def live_payload_aniket(state: dict | None, live: dict) -> dict:
         mtm = fnum(live.get("mtm_usd"))
         p["open_key"] = f"{state.get('expiry')}|{state.get('entry_ts')}"
         p["mtm_usd"] = round(mtm, 3); p["mtm_inr"] = round(mtm * FX, 0)
+        strikes = {l["role"]: fnum(l.get("strike")) for l in state.get("legs", [])}
+        allk = [v for v in strikes.values() if v > 0]
+        lo = strikes.get("hedge_put") or (min(allk) if allk else 0)
+        hi = strikes.get("hedge_call") or (max(allk) if allk else 1)
+        p["spot_pct"] = round(max(0.0, min(100.0, (spot - lo) / max(hi - lo, 1.0) * 100.0)), 2)
         p["legs"] = [{"role": x["role"], "mark": round(fnum(x.get("mark")), 1),
                       "leg_pnl": round(fnum(x.get("leg_pnl")), 3),
                       "status": x.get("status", "open")}
@@ -281,6 +286,42 @@ def render_aniket(state, live, trades, stats, variant="aniket") -> str:
         mtm = fnum(live.get("mtm_usd"))
         credit = fnum(state.get("net_credit_usd"))
         stopped = live.get("stopped", 0)
+        # ---- zone geometry: bar spans the OTM hedge strikes; green comfort band
+        #      = between the nearest ITM shorts (ITM1 call .. ITM1 put) ----
+        strikes = {l["role"]: fnum(l.get("strike")) for l in state.get("legs", [])}
+        allk = [v for v in strikes.values() if v > 0]
+        lo = strikes.get("hedge_put") or (min(allk) if allk else 0)
+        hi = strikes.get("hedge_call") or (max(allk) if allk else 1)
+        zspan = max(hi - lo, 1.0)
+        def zpct(x): return max(0.0, min(100.0, (x - lo) / zspan * 100.0))
+        sc1 = strikes.get("short_call_ITM1", lo); sp1 = strikes.get("short_put_ITM1", hi)
+        b0, b1 = zpct(sc1), zpct(sp1)
+        espot = fnum(state.get("spot_entry"))
+        cur = spot or espot
+        zone_html = f"""
+          <div class="zone">
+            <div class="zonebar">
+              <div class="profit" style="left:{b0:.1f}%;width:{max(b1-b0,0):.1f}%"></div>
+              <div class="tick" style="left:{b0:.1f}%"><span>{sc1:,.0f}</span></div>
+              <div class="tick" style="left:{b1:.1f}%"><span>{sp1:,.0f}</span></div>
+              <div class="espot" style="left:{zpct(espot):.1f}%" title="entry {espot:,.0f}"></div>
+              <div class="spot" id="aspot-marker" style="left:{zpct(cur):.1f}%" title="spot {cur:,.0f}"></div>
+            </div>
+            <div class="zoneends"><span>{lo:,.0f} (put hedge)</span>
+              <span>comfort band = stay near entry</span><span>{hi:,.0f} (call hedge)</span></div>
+          </div>"""
+        # max profit / max loss = best / worst expiry payoff across spot (no stops;
+        # the OTM hedges make max loss finite = defined risk).
+        legs_l = state.get("legs", [])
+        maxp, maxl = -1e18, 1e18
+        for i in range(41):
+            Sx = espot * (0.6 + i * 0.02)   # 0.6x .. 1.4x of entry spot
+            pnl = credit
+            for l in legs_l:
+                cvl = fnum(l.get("contract_value"), 0.001); lo_l = int(l.get("lots", 0)); k = fnum(l.get("strike"))
+                intr = max(0.0, Sx - k) if l.get("option_type") == "call" else max(0.0, k - Sx)
+                pnl += (-intr if l.get("side") == "sell" else intr) * lo_l * cvl
+            maxp = max(maxp, pnl); maxl = min(maxl, pnl)
         rows = ""
         for x in live.get("legs_mtm", state.get("legs", [])):
             role = x["role"]; side = x["side"].upper()
@@ -299,19 +340,19 @@ def render_aniket(state, live, trades, stats, variant="aniket") -> str:
         open_html = f"""
         <div class="panel">
           <div class="panel-title">Open Position
-            <span class="muted">· 12-leg ITM ladder · exp {state.get('expiry')} · <span id="stopped-n">{stopped}</span> legs stopped</span></div>
+            <span class="muted">· 12-leg ITM ladder · exp {state.get('expiry')} · credit {_inr(credit)} · spot ${cur:,.0f} · <span id="stopped-n">{stopped}</span> stopped</span></div>
           <div class="oprow">
             <div class="opbox"><div class="opk">Live P&amp;L (incl. stops)</div>
               <div class="opv {_money_class(mtm)}" id="mtm-inr">{('+' if mtm>=0 else '')}{_inr(mtm)}</div>
               <div class="opsub {_money_class(mtm)}" id="mtm-usd">{('+' if mtm>=0 else '')}${mtm:,.3f}</div></div>
-            <div class="opbox"><div class="opk">Net Credit (entry)</div>
-              <div class="opv pos">{_inr(credit)}</div><div class="opsub">${credit:,.2f}</div></div>
-            <div class="opbox"><div class="opk">Spot</div>
-              <div class="opv" id="aspot">${(spot or fnum(state.get('spot_entry'))):,.0f}</div>
-              <div class="opsub">entry ${fnum(state.get('spot_entry')):,.0f}</div></div>
+            <div class="opbox"><div class="opk">Max Profit (at expiry)</div>
+              <div class="opv pos">{_inr(maxp)}</div><div class="opsub">${maxp:,.2f} · spot stays near entry</div></div>
+            <div class="opbox"><div class="opk">Max Loss (no stops)</div>
+              <div class="opv neg">{_inr(maxl)}</div><div class="opsub">${maxl:,.2f} · stops aim to cut sooner</div></div>
             <div class="opbox"><div class="opk">Legs Stopped</div>
               <div class="opv" id="stopped-big">{stopped}</div><div class="opsub">of 10 short legs</div></div>
           </div>
+          {zone_html}
           <table class="legs"><thead><tr><th>leg</th><th>side</th><th>strike</th><th>lots</th>
             <th>entry</th><th>mark</th><th>stop@</th><th>status</th><th>P&amp;L $</th><th>P&amp;L ₹</th></tr></thead>
             <tbody>{rows}</tbody></table>
@@ -368,6 +409,7 @@ async function poll(){{
       const mi=document.getElementById('mtm-inr'); if(mi){{mi.textContent=sign+'₹'+Math.round(d.mtm_inr).toLocaleString(); mi.className='opv '+cls;}}
       const mv=document.getElementById('mtm-usd'); if(mv){{mv.textContent=sign+'$'+d.mtm_usd.toFixed(3); mv.className='opsub '+cls;}} }}
     setTxt('stopped-n', d.stopped); setTxt('stopped-big', d.stopped);
+    const mk=document.getElementById('aspot-marker'); if(mk && d.spot_pct!=null) mk.style.left=d.spot_pct+'%';
     (d.legs||[]).forEach(l=>{{
       const m=document.getElementById('mark-'+l.role); if(m)m.textContent=l.mark.toFixed(1);
       const cls=l.leg_pnl>0?'pos':(l.leg_pnl<0?'neg':'zero'); const sign=l.leg_pnl>=0?'+':'';
@@ -639,6 +681,7 @@ main{padding:18px 22px;max-width:1100px;margin:0 auto}
 .zonebar .tick{position:absolute;top:0;height:100%;border-left:1px dashed #bbb}
 .zonebar .tick span{position:absolute;top:-18px;left:-18px;font-size:10px;color:var(--muted)}
 .zonebar .spot{position:absolute;top:-4px;width:3px;height:38px;background:var(--accent);border-radius:2px;transition:left .6s ease-out}
+.zonebar .espot{position:absolute;top:0;width:2px;height:30px;background:#9b9b9b;opacity:.55}
 @keyframes flup{0%{background:rgba(0,168,107,.22)}100%{background:transparent}}
 @keyframes fldn{0%{background:rgba(239,83,80,.22)}100%{background:transparent}}
 .up{animation:flup .6s ease-out}.down{animation:fldn .6s ease-out}
