@@ -41,17 +41,21 @@ CAPITAL_INR = float(os.getenv("DELTA_IC_CAPITAL_INR", "200000"))
 FX = float(os.getenv("DELTA_IC_FX_INR_USD", "84"))
 CAPITAL_USD = CAPITAL_INR / FX
 
-# Variants we can view (label -> file suffix). "standard" uses the original
-# un-suffixed files; others are namespaced (must match the runner).
-VARIANTS = {"standard": "", "narrow": "_narrow"}
+# Variants we can view. Condor variants share the iron_condor_* files (suffixed);
+# "aniket" is a different 12-leg strategy with its own aniket_* files + layout.
+VARIANTS = {"standard": "", "narrow": "_narrow", "aniket": None}
 
 
 def state_file(variant: str) -> Path:
-    return Path(f"data/iron_condor_state{VARIANTS.get(variant, '')}.json")
+    if variant == "aniket":
+        return Path("data/aniket_state.json")
+    return Path(f"data/iron_condor_state{VARIANTS.get(variant) or ''}.json")
 
 
 def trades_file(variant: str) -> Path:
-    return Path(f"data/iron_condor_trades{VARIANTS.get(variant, '')}.csv")
+    if variant == "aniket":
+        return Path("data/aniket_trades.csv")
+    return Path(f"data/iron_condor_trades{VARIANTS.get(variant) or ''}.csv")
 
 
 # ============================================================
@@ -127,7 +131,8 @@ def get_live_cached(state: dict | None, variant: str = "standard") -> dict:
     c = _live_cache.get(variant)
     if c is not None and (now - c["t"]) < LIVE_TTL:
         return c["data"]
-    data = asyncio.run(gather_live(state))
+    fetch = gather_live_aniket if variant == "aniket" else gather_live
+    data = asyncio.run(fetch(state))
     _live_cache[variant] = {"t": now, "data": data}
     return data
 
@@ -165,13 +170,64 @@ def live_payload(state: dict | None, live: dict) -> dict:
     return p
 
 
+async def gather_live_aniket(state: dict | None) -> dict:
+    """Live MTM for the 12-leg Aniket structure (different schema: entry_px, lots, status, stop_px)."""
+    out = {"spot": None, "legs_mtm": [], "mtm_usd": 0.0, "api_ok": False, "stopped": 0}
+    try:
+        async with DeltaClient.from_env() as c:
+            out["spot"] = await c.get_spot_price(PERP)
+            out["api_ok"] = True
+            if state:
+                for leg in state.get("legs", []):
+                    cv = fnum(leg.get("contract_value"), 0.001)
+                    lots = int(leg.get("lots", 0))
+                    entry = fnum(leg.get("entry_px"))
+                    side = leg.get("side")
+                    status = leg.get("status", "open")
+                    if status == "stopped":
+                        mark = fnum(leg.get("exit_px"))
+                        leg_pnl = (entry - mark) * lots * cv   # short, realized
+                        out["stopped"] += 1
+                    else:
+                        mark = entry
+                        try:
+                            tk = await c.get_option_ticker(leg["symbol"]) or {}
+                            q = tk.get("quotes") or {}
+                            mark = fnum(tk.get("mark_price") or q.get("mark_price") or entry, entry)
+                        except Exception:
+                            pass
+                        leg_pnl = ((entry - mark) if side == "sell" else (mark - entry)) * lots * cv
+                    out["legs_mtm"].append({**leg, "mark": mark, "leg_pnl": leg_pnl})
+                    out["mtm_usd"] += leg_pnl
+    except Exception as e:
+        out["error"] = str(e)
+    return out
+
+
+def live_payload_aniket(state: dict | None, live: dict) -> dict:
+    spot = live.get("spot")
+    p = {"ok": bool(live.get("api_ok")), "spot": spot,
+         "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+         "open_key": None, "mtm_usd": None, "mtm_inr": None,
+         "stopped": live.get("stopped", 0), "legs": []}
+    if state and spot:
+        mtm = fnum(live.get("mtm_usd"))
+        p["open_key"] = f"{state.get('expiry')}|{state.get('entry_ts')}"
+        p["mtm_usd"] = round(mtm, 3); p["mtm_inr"] = round(mtm * FX, 0)
+        p["legs"] = [{"role": x["role"], "mark": round(fnum(x.get("mark")), 1),
+                      "leg_pnl": round(fnum(x.get("leg_pnl")), 3),
+                      "status": x.get("status", "open")}
+                     for x in live.get("legs_mtm", [])]
+    return p
+
+
 def compute_stats(trades: list[dict]) -> dict:
     settled = [t for t in trades if t.get("outcome")]
     n = len(settled)
     nets = [fnum(t.get("net_pnl_usd") or t.get("pnl_usd")) for t in settled]
     gross = [fnum(t.get("gross_pnl_usd") or t.get("pnl_usd")) for t in settled]
-    fees = [fnum(t.get("entry_fees_usd")) + fnum(t.get("settle_fees_usd")) for t in settled]
-    wins = sum(1 for t in settled if t.get("outcome") == "MAX_WIN")
+    fees = [fnum(t.get("entry_fees_usd")) + fnum(t.get("settle_fees_usd")) + fnum(t.get("fees_usd")) for t in settled]
+    wins = sum(1 for t in settled if t.get("outcome") in ("MAX_WIN", "WIN"))
     total_net = sum(nets)
     return {
         "n": n,
@@ -189,7 +245,7 @@ def compute_stats(trades: list[dict]) -> dict:
 # ============================================================
 
 def _variant_toggle(active: str) -> str:
-    labels = {"standard": "Standard ±1.5/4", "narrow": "Narrow ±1/3"}
+    labels = {"standard": "Standard ±1.5/4", "narrow": "Narrow ±1/3", "aniket": "Aniket Special"}
     out = []
     for v, lbl in labels.items():
         cls = "vt on" if v == active else "vt"
@@ -203,6 +259,127 @@ def _money_class(v: float) -> str:
 
 def _inr(usd: float) -> str:
     return f"₹{usd * FX:,.0f}"
+
+
+def render_aniket(state, live, trades, stats, variant="aniket") -> str:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    spot = live.get("spot")
+    spot_str = f"${spot:,.0f}" if spot else "—"
+    api_badge = ("<span class='dot ok'></span>live" if live.get("api_ok")
+                 else "<span class='dot bad'></span>API down")
+    eq = stats["equity_usd"]; net = stats["total_net_usd"]
+    cards = f"""
+    <div class="cards">
+      <div class="card"><div class="k">Paper Capital</div><div class="v">₹{CAPITAL_INR:,.0f}</div><div class="sub">${CAPITAL_USD:,.0f}</div></div>
+      <div class="card"><div class="k">Equity</div><div class="v">{_inr(eq)}</div><div class="sub">${eq:,.2f}</div></div>
+      <div class="card"><div class="k">Total Net P&amp;L</div><div class="v {_money_class(net)}">{('+' if net>=0 else '')}{_inr(net)}</div><div class="sub {_money_class(net)}">{('+' if net>=0 else '')}${net:,.2f}</div></div>
+      <div class="card"><div class="k">Win Rate</div><div class="v">{stats['win_rate']:.0f}%</div><div class="sub">{stats['wins']}/{stats['n']} settled</div></div>
+      <div class="card"><div class="k">Fees Paid</div><div class="v">${stats['total_fees_usd']:,.2f}</div><div class="sub">{_inr(stats['total_fees_usd'])}</div></div>
+    </div>"""
+
+    if state:
+        mtm = fnum(live.get("mtm_usd"))
+        credit = fnum(state.get("net_credit_usd"))
+        stopped = live.get("stopped", 0)
+        rows = ""
+        for x in live.get("legs_mtm", state.get("legs", [])):
+            role = x["role"]; side = x["side"].upper()
+            entry = fnum(x.get("entry_px")); mark = fnum(x.get("mark"), entry)
+            stop = fnum(x.get("stop_px")); lpnl = fnum(x.get("leg_pnl"))
+            status = x.get("status", "open")
+            sc = "sell" if side == "SELL" else "buy"
+            st_badge = "<span class='oc loss'>STOPPED</span>" if status == "stopped" else "<span class='oc win'>open</span>"
+            stop_txt = f"{stop:.0f}" if stop > 0 else "—"
+            rows += (f"<tr><td>{role.replace('_',' ')}</td><td class='{sc}'>{side}</td>"
+                     f"<td>{fnum(x.get('strike')):,.0f}</td><td>{x.get('lots','')}</td>"
+                     f"<td>{entry:.1f}</td><td id='mark-{role}'>{mark:.1f}</td>"
+                     f"<td>{stop_txt}</td><td id='status-{role}'>{st_badge}</td>"
+                     f"<td id='pnl-{role}' class='{_money_class(lpnl)}'>{lpnl:+.3f}</td>"
+                     f"<td id='pnlinr-{role}' class='{_money_class(lpnl)}'>{'+' if lpnl>=0 else ''}₹{lpnl*FX:,.0f}</td></tr>")
+        open_html = f"""
+        <div class="panel">
+          <div class="panel-title">Open Position
+            <span class="muted">· 12-leg ITM ladder · exp {state.get('expiry')} · <span id="stopped-n">{stopped}</span> legs stopped</span></div>
+          <div class="oprow">
+            <div class="opbox"><div class="opk">Live P&amp;L (incl. stops)</div>
+              <div class="opv {_money_class(mtm)}" id="mtm-inr">{('+' if mtm>=0 else '')}{_inr(mtm)}</div>
+              <div class="opsub {_money_class(mtm)}" id="mtm-usd">{('+' if mtm>=0 else '')}${mtm:,.3f}</div></div>
+            <div class="opbox"><div class="opk">Net Credit (entry)</div>
+              <div class="opv pos">{_inr(credit)}</div><div class="opsub">${credit:,.2f}</div></div>
+            <div class="opbox"><div class="opk">Spot</div>
+              <div class="opv" id="aspot">${(spot or fnum(state.get('spot_entry'))):,.0f}</div>
+              <div class="opsub">entry ${fnum(state.get('spot_entry')):,.0f}</div></div>
+            <div class="opbox"><div class="opk">Legs Stopped</div>
+              <div class="opv" id="stopped-big">{stopped}</div><div class="opsub">of 10 short legs</div></div>
+          </div>
+          <table class="legs"><thead><tr><th>leg</th><th>side</th><th>strike</th><th>lots</th>
+            <th>entry</th><th>mark</th><th>stop@</th><th>status</th><th>P&amp;L $</th><th>P&amp;L ₹</th></tr></thead>
+            <tbody>{rows}</tbody></table>
+        </div>"""
+    else:
+        open_html = ("<div class='panel'><div class='panel-title'>Open Position</div>"
+                     "<div class='empty'>No open position. Next entry fires at 12:10 UTC.</div></div>")
+
+    # history
+    settled = [t for t in trades if t.get("outcome")]
+    if settled:
+        hrows = ""
+        for t in reversed(settled[-40:]):
+            net_t = fnum(t.get("net_pnl_usd")); date = (t.get("settle_ts") or "")[:10]
+            badge = "win" if t.get("outcome") == "WIN" else "loss"
+            hrows += (f"<tr><td>{date}</td><td>{t.get('expiry','')}</td>"
+                      f"<td>{fnum(t.get('spot_entry')):,.0f}→{fnum(t.get('spot_settle')):,.0f}</td>"
+                      f"<td>{t.get('stopped_legs','')}</td>"
+                      f"<td class='{_money_class(net_t)}'>{net_t:+.2f} (₹{net_t*FX:,.0f})</td>"
+                      f"<td><span class='oc {badge}'>{t.get('outcome')}</span></td></tr>")
+        hist = (f"<div class='panel'><div class='panel-title'>History <span class='muted'>· {len(settled)} settled</span></div>"
+                f"<table class='hist'><thead><tr><th>date</th><th>exp</th><th>spot</th><th>stopped</th>"
+                f"<th>net P&amp;L</th><th>outcome</th></tr></thead><tbody>{hrows}</tbody></table></div>")
+    else:
+        hist = "<div class='panel'><div class='panel-title'>History</div><div class='empty'>No settled trades yet — first settles today 12:09 UTC.</div></div>"
+
+    open_key = f"{state.get('expiry')}|{state.get('entry_ts')}" if state else "none"
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Aniket Special — Delta India</title><style>{CSS}</style></head><body>
+<header>
+  <div class="brand">Iron Condor <span class="muted">· Delta India</span>
+    <span class="vtoggle">{_variant_toggle(variant)}</span></div>
+  <div class="hmeta"><span class="badge paper">PAPER</span>
+    <span class="sep">BTC <span id="hdr-spot">{spot_str}</span></span>
+    <span class="sep" id="api-badge">{api_badge}</span>
+    <span class="muted">live <span id="live-ts">{now[11:]}</span></span></div>
+</header>
+<main>{cards}{open_html}{hist}
+  <div class="foot">Aniket Special: short ITM 1/5/10/20/30 calls+puts (10 lots) + OTM20 hedges (50), per-leg stops. Live every 3s. ₹ at {FX:.0f}/$.</div>
+</main>
+<script>
+const INITIAL_KEY = {json.dumps(open_key)}; const FX = {FX};
+function setTxt(id,t){{const e=document.getElementById(id); if(e&&e.textContent!==t)e.textContent=t;}}
+async function poll(){{
+  try{{
+    const d = await (await fetch('/api/live?variant=aniket',{{cache:'no-store'}})).json();
+    if(d.open_key !== INITIAL_KEY){{ location.reload(); return; }}
+    setTxt('live-ts', d.ts);
+    if(d.spot!=null){{ const s='$'+Math.round(d.spot).toLocaleString();
+      setTxt('hdr-spot', s); setTxt('aspot', s); }}
+    if(d.mtm_usd!=null){{ const cls=d.mtm_usd>0?'pos':(d.mtm_usd<0?'neg':'zero');
+      const sign=d.mtm_usd>=0?'+':'';
+      const mi=document.getElementById('mtm-inr'); if(mi){{mi.textContent=sign+'₹'+Math.round(d.mtm_inr).toLocaleString(); mi.className='opv '+cls;}}
+      const mv=document.getElementById('mtm-usd'); if(mv){{mv.textContent=sign+'$'+d.mtm_usd.toFixed(3); mv.className='opsub '+cls;}} }}
+    setTxt('stopped-n', d.stopped); setTxt('stopped-big', d.stopped);
+    (d.legs||[]).forEach(l=>{{
+      const m=document.getElementById('mark-'+l.role); if(m)m.textContent=l.mark.toFixed(1);
+      const cls=l.leg_pnl>0?'pos':(l.leg_pnl<0?'neg':'zero'); const sign=l.leg_pnl>=0?'+':'';
+      const p=document.getElementById('pnl-'+l.role); if(p){{p.textContent=sign+l.leg_pnl.toFixed(3); p.className=cls;}}
+      const pr=document.getElementById('pnlinr-'+l.role); if(pr){{pr.textContent=sign+'₹'+Math.round(l.leg_pnl*FX).toLocaleString(); pr.className=cls;}}
+      const s=document.getElementById('status-'+l.role); if(s)s.innerHTML = l.status==='stopped'?"<span class='oc loss'>STOPPED</span>":"<span class='oc win'>open</span>";
+    }});
+    const ab=document.getElementById('api-badge'); if(ab)ab.innerHTML=d.ok?"<span class='dot ok'></span>live":"<span class='dot bad'></span>API down";
+  }}catch(e){{}}
+}}
+setInterval(poll,3000); poll();
+</script></body></html>"""
 
 
 def render(state, live, trades, stats, variant="standard") -> str:
@@ -508,7 +685,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/live":
                 state = load_state(variant)
                 live = get_live_cached(state, variant)
-                payload = live_payload(state, live)
+                payload = (live_payload_aniket if variant == "aniket" else live_payload)(state, live)
                 self._send(json.dumps(payload).encode(), "application/json")
                 return
             if path in ("/", "/dashboard", "/index.html"):
@@ -516,7 +693,8 @@ class Handler(BaseHTTPRequestHandler):
                 trades = load_trades(variant)
                 live = get_live_cached(state, variant)
                 stats = compute_stats(trades)
-                html = render(state, live, trades, stats, variant)
+                renderer = render_aniket if variant == "aniket" else render
+                html = renderer(state, live, trades, stats, variant)
                 self._send(html.encode("utf-8"), "text/html; charset=utf-8")
                 return
             self.send_response(404); self.end_headers()
