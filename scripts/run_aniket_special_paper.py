@@ -223,8 +223,11 @@ async def cmd_enter():
             print("Aniket ABORT: a short leg has no premium (illiquid).");
             await tg("error","<b>Aniket abort</b>: illiquid short leg (no premium)."); return
 
+        # entry_px is the REAL Delta bid (sells) / ask (buys) — already the
+        # realistic fill, so NO extra capture haircut (that double-counts the
+        # spread and is catastrophic on deep-ITM premium which is mostly intrinsic).
         net_credit = sum(
-            (l.entry_px*CAPTURE if l.side=="sell" else -l.entry_px) * l.lots * l.contract_value
+            (l.entry_px if l.side=="sell" else -l.entry_px) * l.lots * l.contract_value
             for l in legs)
         st = AniketState(iso(now()), expiry, "", spot,
                          "live" if IS_LIVE else "paper",
@@ -300,11 +303,8 @@ async def cmd_settle():
             gross += (intr - entry)*q
             if intr>0: fees += leg_fee_usd(spot_settle, intr, l["lots"], cv)
 
-    # apply capture only to the short ENTRY credit portion already embedded above?
-    # Above used full entry for shorts; reduce by the (1-CAPTURE) we wouldn't capture:
-    cap_adj = sum((l["entry_px"]*(1-CAPTURE))*l["lots"]*l["contract_value"]
-                  for l in st.legs if l["side"]=="sell")
-    gross -= cap_adj
+    # No capture adjustment: entry fills were the real bid/ask, so `gross`
+    # already reflects realistic premiums. (Earlier double-haircut removed.)
     net = gross - fees
     equity_inr = CAPITAL_INR + net*FX
     outcome = "WIN" if net>0 else "LOSS"

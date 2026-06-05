@@ -284,7 +284,11 @@ def render_aniket(state, live, trades, stats, variant="aniket") -> str:
 
     if state:
         mtm = fnum(live.get("mtm_usd"))
-        credit = fnum(state.get("net_credit_usd"))
+        # recompute credit from real bid/ask fills (no capture haircut — that
+        # was over-conservative on deep-ITM premium); ignores stored value.
+        credit = sum((fnum(l.get("entry_px")) if l.get("side") == "sell" else -fnum(l.get("entry_px")))
+                     * int(l.get("lots", 0)) * fnum(l.get("contract_value"), 0.001)
+                     for l in state.get("legs", []))
         stopped = live.get("stopped", 0)
         # ---- zone geometry: bar spans the OTM hedge strikes; green comfort band
         #      = between the nearest ITM shorts (ITM1 call .. ITM1 put) ----
