@@ -33,6 +33,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
 
 import httpx  # noqa: E402
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import yfinance as yf  # noqa: E402
 import keystore  # noqa: E402  (scripts/ is on sys.path[0])
@@ -68,6 +69,12 @@ ASSETS = {
     "Gold": "GC=F",
 }
 
+# --- Multi-timeframe EMA support config (CRDS: Confluence-Ranked Dynamic Support) ---
+_TF_SPECS = [("Daily", "D"), ("Weekly", "W-FRI"), ("Monthly", "ME")]
+_SPANS = [20, 50, 200]
+_TF_WEIGHT = {"Daily": 0.3, "Weekly": 0.6, "Monthly": 1.0}  # higher TF = defended by bigger size
+_HIVOL = {"BTC-USD", "GC=F"}  # wider confluence/near tolerance for volatile assets
+
 
 # ============================================================
 # Technical levels (the get_technical_levels tool)
@@ -84,37 +91,203 @@ def _rsi(close: pd.Series, n: int = 14) -> float:
     return float((100 - 100 / (1 + rs)).iloc[-1])
 
 
+def _ema_level(close: pd.Series, span: int):
+    """One EMA value + convergence status + slope, or None if too little history.
+    Uses adjust=True (no first-bar seed injection) so a short series like BTC's
+    weekly-200 is unbiased — NOT adjust=False (that's only correct for Wilder RSI).
+    Publishes only at >=3x span; <3x is returned None ('n/a', never faked)."""
+    close = close.dropna()
+    n = len(close)
+    if n < 3 * span:
+        return None, "n/a", "flat"
+    e = close.ewm(span=span, adjust=True).mean()
+    val = float(e.iloc[-1])
+    look = min(10, n - 1)
+    prev = float(e.iloc[-1 - look])
+    slope = "rising" if val > prev * 1.001 else "falling" if val < prev * 0.999 else "flat"
+    status = "converged" if n >= 5 * span else "converging"
+    return round(val, 2), status, slope
+
+
+def _hold_stats(close: pd.Series, ema: pd.Series, hivol: bool, fwd: int = 5) -> dict:
+    """How often this EMA HELD as support, historically: 'held H out of N tests'.
+    A test = price pulls back from above to touch the EMA (enters a tol band from
+    outside). It HELD if, within the next `fwd` bars, price did NOT close decisively
+    below the EMA (i.e. it bounced). This is the edge the agent learns: a high
+    hold-rate on the nearest support = a real buy-the-dip signal for a retailer.
+    Returns {tests, held, rate} (rate None until >=4 tests so we never over-claim)."""
+    c = close.dropna()
+    e = ema.reindex(c.index)
+    cv, ev = c.values.astype(float), e.values.astype(float)
+    n = len(cv)
+    tol = 0.02 if hivol else 0.01      # 'touched the EMA' band
+    brk = 0.02 if hivol else 0.01      # 'closed decisively below' = a break
+    if n < fwd + 5:
+        return {"tests": 0, "held": 0, "rate": None}
+    tests = held = 0
+    last = -999
+    for j in range(1, n - fwd):
+        if np.isnan(ev[j]) or np.isnan(ev[j - 1]):
+            continue
+        above_before = cv[j - 1] > ev[j - 1] * (1 + tol)        # was clearly above
+        touched = ev[j] * (1 - tol) <= cv[j] <= ev[j] * (1 + tol)  # pulled into the EMA
+        if above_before and touched and (j - last) > fwd:        # fresh, non-overlapping test
+            last = j
+            tests += 1
+            fut_c, fut_e = cv[j + 1:j + 1 + fwd], ev[j + 1:j + 1 + fwd]
+            broke = bool(np.any(fut_c < fut_e * (1 - brk)))      # closed decisively below within fwd bars
+            if not broke:
+                held += 1
+    return {"tests": tests, "held": held, "rate": (round(100 * held / tests) if tests >= 4 else None)}
+
+
+def _resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Resample the single daily frame to a higher timeframe and DROP the partial
+    current bar (the still-forming week/month) so HTF EMAs read off closed bars only."""
+    if rule == "D":
+        return df
+    agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+    r = df.resample(rule).agg(agg).dropna(how="all")
+    if len(r) > 1 and r.index[-1] > df.index[-1]:   # last bucket's right edge is in the future => partial
+        r = r.iloc[:-1]
+    return r
+
+
+def _compute_levels(matrix: list, price: float, swing_low: float, hivol: bool,
+                    hold_by_label: dict | None = None) -> dict:
+    """CRDS: cluster the valid EMAs into confluence bands, score each by
+    timeframe-authority + confluence + slope + freshness, and ALWAYS emit a
+    nearest support, a structural floor and the controlling resistance.
+    Roles are classified by sign(level - price) EVERY run (an EMA is never
+    assumed to still be support); below-all-EMAs assets take the no-support path."""
+    levels = [{"label": f"{m['tf'][0]}{m['span']}", "tf": m["tf"], "value": m["value"], "slope": m["slope"]}
+              for m in matrix if m["value"]]
+    tol = 0.010 if hivol else 0.005
+    near_tol = 0.03 if hivol else 0.015
+    levels.sort(key=lambda x: x["value"])
+    bands = []
+    for lv in levels:
+        if bands and (lv["value"] - bands[-1]["lo"]) / bands[-1]["mid"] <= tol:
+            b = bands[-1]; b["members"].append(lv)
+            b["lo"] = min(b["lo"], lv["value"]); b["hi"] = max(b["hi"], lv["value"]); b["mid"] = (b["lo"] + b["hi"]) / 2
+        else:
+            bands.append({"members": [lv], "lo": lv["value"], "hi": lv["value"], "mid": lv["value"]})
+    for b in bands:
+        tfw = max(_TF_WEIGHT[m["tf"]] for m in b["members"])
+        cross = len({m["tf"] for m in b["members"]}) >= 2
+        razor = (b["hi"] - b["lo"]) / b["mid"] <= 0.004
+        conf = 1.0 if (cross or len(b["members"]) >= 3 or (razor and len(b["members"]) >= 2)) \
+            else (0.5 if len(b["members"]) >= 2 else 0.0)
+        rising = sum(m["slope"] == "rising" for m in b["members"])
+        falling = sum(m["slope"] == "falling" for m in b["members"])
+        slope = 1.0 if rising > falling else 0.0 if falling > rising else 0.5
+        fresh = 1.0 if abs(b["mid"] / price - 1) <= near_tol else 0.5
+        b["strength"] = round(40 * tfw + 30 * conf + 20 * slope + 10 * fresh, 1)
+        b["grade"] = "STRONG" if b["strength"] >= 60 else "MODERATE" if b["strength"] >= 40 else "WEAK"
+        b["members_str"] = "+".join(m["label"] for m in b["members"])
+        rates = [hold_by_label.get(m["label"]) for m in b["members"]] if hold_by_label else []
+        rates = [r for r in rates if r is not None]
+        b["hold_rate"] = max(rates) if rates else None   # best historical hold-rate in the band
+
+    # 20-day swing low: a guaranteed structural support floor (defined strength).
+    sl = {"members_str": "20d swing low", "lo": swing_low, "hi": swing_low, "mid": swing_low,
+          "strength": 50.0, "grade": "MODERATE", "hold_rate": None}
+
+    def fmt(b):
+        return {"value": round(b["mid"], 2), "pct": round((price / b["mid"] - 1) * 100, 2),
+                "strength": b["strength"], "grade": b["grade"], "members": b["members_str"],
+                "hold_rate": b.get("hold_rate")}
+
+    below = [b for b in bands if b["hi"] <= price]      # entirely below price = support
+    straddle = [b for b in bands if b["lo"] < price < b["hi"]]  # price sits inside band
+    above = [b for b in bands if b["lo"] >= price]      # entirely above = resistance
+    no_ema_support = not below and not straddle
+
+    cand = sorted(below + straddle, key=lambda b: -b["mid"])  # nearest-below first
+    # nearest_support = the literal first line price would hit (any grade — its
+    # quality is reported via 'grade'); never skip it. structural_floor surfaces
+    # the strongest zone below (where the thesis lives). Together they satisfy the
+    # "always state support" + "if it breaks, here's the real floor" contract.
+    nearest = cand[0] if cand else sl
+    structural = max(below + [sl], key=lambda b: (b["strength"], b["mid"]))
+    controlling = min(above, key=lambda b: b["mid"]) if above else None
+    return {
+        "nearest_support": fmt(nearest),
+        "structural_floor": fmt(structural),
+        "controlling_resistance": (fmt(controlling) if controlling else None),
+        "confluence_zones": [{"value": round(b["mid"], 2), "members": b["members_str"],
+                              "strength": b["strength"], "grade": b["grade"]}
+                             for b in bands if len(b["members"]) >= 2],
+        "no_ema_support": no_ema_support,
+    }
+
+
 def compute_one(ticker: str) -> dict:
-    # 3y of daily bars: a 200-EMA needs ~3x its span to converge. With only 1y
-    # (~251 bars) the 200-EMA carries 0.2-0.5% seed-warmup error. 3y (~750 bars)
-    # drives that residual below ~0.06%. 20-day support / 1-5d change use tail()
-    # so they're unaffected by the longer window.
-    df = yf.download(ticker, period="3y", interval="1d", progress=False, auto_adjust=False)
-    if df.empty:
+    # ONE 'max' daily download -> resample to Weekly/Monthly. This both fixes the
+    # EMA200 warmup bug (thousands of bars, not 252) and gives the full 9-EMA
+    # multi-timeframe matrix from a single consistent vintage.
+    try:
+        df = yf.download(ticker, period="max", interval="1d", progress=False, auto_adjust=False)
+    except Exception:
+        df = yf.download(ticker, period="15y", interval="1d", progress=False, auto_adjust=False)
+    if df is None or df.empty:
         return {"error": "no data"}
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
-    c = df["Close"].dropna()
-    ema50 = c.ewm(span=50, adjust=False).mean().iloc[-1]
-    ema200 = c.ewm(span=200, adjust=False).mean().iloc[-1] if len(c) >= 200 else float("nan")
-    price = float(c.iloc[-1])
-    hi20 = float(df["High"].tail(20).max()); lo20 = float(df["Low"].tail(20).min())
-    chg1 = float((c.iloc[-1] / c.iloc[-2] - 1) * 100) if len(c) >= 2 else 0.0
-    chg5 = float((c.iloc[-1] / c.iloc[-6] - 1) * 100) if len(c) >= 6 else 0.0
-    trend = ("uptrend" if price > ema50 and (pd.isna(ema200) or ema50 > ema200)
-             else "downtrend" if price < ema50 and (pd.isna(ema200) or ema50 < ema200)
+    df = df.dropna(subset=["Close"])
+    price = float(df["Close"].iloc[-1])
+    hivol = ticker in _HIVOL
+
+    matrix, md, cells, hold_by_label = [], {}, {}, {}
+    for tf, rule in _TF_SPECS:
+        cc = _resample_ohlc(df, rule)["Close"].dropna()
+        for span in _SPANS:
+            val, status, slope = _ema_level(cc, span)
+            hold = (_hold_stats(cc, cc.ewm(span=span, adjust=True).mean(), hivol)
+                    if val else {"tests": 0, "held": 0, "rate": None})
+            matrix.append({"tf": tf, "span": span, "value": val, "status": status, "slope": slope})
+            md[(tf, span)] = val
+            label = f"{tf[0]}{span}"               # D20 / W50 / M200
+            hold_by_label[label] = hold["rate"]
+            cells[label] = {
+                "v": val, "status": status, "slope": slope,
+                "role": (None if val is None else ("support" if val <= price else "resistance")),
+                "pct": (round((price / val - 1) * 100, 2) if val else None),
+                "held": hold["held"], "tests": hold["tests"], "rate": hold["rate"],
+            }
+
+    lo20 = float(df["Low"].tail(20).min()); hi20 = float(df["High"].tail(20).max())
+    rsi = round(_rsi(df["Close"]), 1)
+    lv = _compute_levels(matrix, price, lo20, hivol, hold_by_label)
+
+    ema50, ema200 = md[("Daily", 50)], md[("Daily", 200)]
+    d20, d50, d200 = md[("Daily", 20)], md[("Daily", 50)], md[("Daily", 200)]
+    stack = ("bullish" if None not in (d20, d50, d200) and d20 > d50 > d200
+             else "bearish" if None not in (d20, d50, d200) and d20 < d50 < d200 else "tangled")
+    trend = ("uptrend" if ema50 and price > ema50 and (ema200 is None or ema50 > ema200)
+             else "downtrend" if ema50 and price < ema50 and (ema200 is None or ema50 < ema200)
              else "sideways")
+    chg1 = float((df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1) * 100) if len(df) >= 2 else 0.0
+    chg5 = float((df["Close"].iloc[-1] / df["Close"].iloc[-6] - 1) * 100) if len(df) >= 6 else 0.0
     return {
         "price": round(price, 2),
-        "ema50": round(float(ema50), 2),
-        "ema200": None if pd.isna(ema200) else round(float(ema200), 2),
-        "pct_from_ema50": round((price / float(ema50) - 1) * 100, 2),
-        "rsi14": round(_rsi(c), 1),
+        "ema50": round(ema50, 2) if ema50 else None,
+        "ema200": round(ema200, 2) if ema200 else None,
+        "pct_from_ema50": round((price / ema50 - 1) * 100, 2) if ema50 else None,
+        "rsi14": rsi,
         "support_20d": round(lo20, 2),
         "resistance_20d": round(hi20, 2),
         "chg_1d_pct": round(chg1, 2),
         "chg_5d_pct": round(chg5, 2),
         "trend": trend,
+        # --- multi-timeframe (CRDS) ---
+        "matrix": cells,   # {label: {v, role, pct, held, tests, rate, slope, status}}
+        "stack_daily": stack,
+        "nearest_support": lv["nearest_support"],
+        "structural_floor": lv["structural_floor"],
+        "controlling_resistance": lv["controlling_resistance"],
+        "confluence_zones": lv["confluence_zones"],
+        "no_ema_support": lv["no_ema_support"],
     }
 
 
@@ -359,7 +532,24 @@ def _enrich_with_technicals(parsed: dict, tech: dict) -> dict:
             a["price"] = t["price"]
             a["trend"] = t["trend"]
             a["rsi"] = t["rsi14"]
-            a["support"] = f"{t['support_20d']:,.0f} (20-day low) · 50 EMA {t['ema50']:,.0f}"
+            ns, sf, cr = t.get("nearest_support"), t.get("structural_floor"), t.get("controlling_resistance")
+            if t.get("no_ema_support") and ns:
+                # below EVERY EMA (e.g. Bitcoin breakdown): no dynamic support — the
+                # nearest EMA is overhead RESISTANCE; only floor is the prior swing low.
+                a["support"] = (f"NO EMA support — below all EMAs. Structural floor "
+                                f"{ns['value']:,.0f} (20d low, {ns['pct']:+.1f}%)"
+                                + (f"; nearest EMA {cr['value']:,.0f} is RESISTANCE ({cr['pct']:+.1f}%)" if cr else ""))
+            elif ns:
+                hr = f", held {ns['hold_rate']}% of tests" if ns.get("hold_rate") is not None else ""
+                a["support"] = f"{ns['value']:,.0f} ({ns['members']}, {ns['pct']:+.1f}%, {ns['grade']}{hr})"
+                if sf and sf["value"] != ns["value"]:
+                    a["support"] += f" · floor {sf['value']:,.0f} ({sf['members']}, {sf['grade']})"
+            if cr and not t.get("no_ema_support"):
+                a["resistance"] = f"{cr['value']:,.0f} ({cr['members']}, {cr['pct']:+.1f}%)"
+            a["levels_matrix"] = t.get("matrix")
+            a["confluence_zones"] = t.get("confluence_zones")
+            a["nearest_members"] = ns.get("members") if ns else None
+            a["no_ema_support"] = t.get("no_ema_support")
     return parsed
 
 

@@ -69,6 +69,39 @@ def _gauge_pct(overall: str, conf: float) -> float:
 ANTHROPIC_BUDGET_INR = float(os.getenv("ANTHROPIC_BUDGET_INR", "100"))
 
 
+def _ema_table(matrix: dict | None, nearest_members: str | None) -> str:
+    """Clear 3x3 EMA grid (Daily/Weekly/Monthly x 20/50/200). Each cell shows the
+    EMA value, distance from price, role (green=support / red=resistance) and the
+    historical hold-rate 'held/tests'. The nearest support is ring-highlighted."""
+    if not matrix:
+        return ""
+    near = set((nearest_members or "").split("+"))
+    rows = ""
+    for tf, label in (("D", "Daily"), ("W", "Weekly"), ("M", "Monthly")):
+        tds = ""
+        for sp in (20, 50, 200):
+            c = matrix.get(f"{tf}{sp}") or {}
+            v = c.get("v")
+            if v is None:
+                tds += "<td class='emna'>n/a</td>"
+                continue
+            role = c.get("role")  # support / resistance
+            cls = "emsup" if role == "support" else "emres"
+            if f"{tf}{sp}" in near:
+                cls += " emnear"
+            pct = c.get("pct")
+            rate = c.get("rate")
+            hr = (f"<span class='emhr'>{rate}% · {c.get('held')}/{c.get('tests')}</span>"
+                  if rate is not None else
+                  (f"<span class='emhr emhrn'>{c.get('held')}/{c.get('tests')}</span>" if c.get("tests") else ""))
+            arrow = "▲" if role == "support" else "▼"
+            tds += (f"<td class='{cls}'><span class='emv'>{v:,.0f}</span>"
+                    f"<span class='empct'>{arrow} {pct:+.1f}%</span>{hr}</td>")
+        rows += f"<tr><th>{label}</th>{tds}</tr>"
+    return (f"<table class='emat'><thead><tr><th></th><th>20 EMA</th><th>50 EMA</th>"
+            f"<th>200 EMA</th></tr></thead><tbody>{rows}</tbody></table>")
+
+
 def render(r: dict | None) -> str:
     g_summary = keystore.gemini_keys_summary()
     a_keymask = keystore.masked("anthropic_api_key", "ANTHROPIC_API_KEY") or "(not set)"
@@ -138,6 +171,7 @@ def render(r: dict | None) -> str:
               <div class="asig">{_esc(a.get('signal',''))}</div>
               <div class="asup"><span class="lbl">SUPPORT</span> {_esc(a.get('support',''))}</div>
               <div class="abrk"><span class="lbl">IF IT BREAKS</span> {_esc(a.get('if_breaks',''))}</div>
+              {_ema_table(a.get('levels_matrix'), a.get('nearest_members'))}
             </div>"""
         assets_html = (f"<div class='panel'><div class='panel-title'>Per-asset signals</div>"
                        f"<div class='agrid'>{cards}</div></div>") if cards else ""
@@ -264,6 +298,18 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .asig{color:var(--text);line-height:1.5;margin-bottom:8px}
 .asup,.abrk{font-size:12px;line-height:1.5;margin-top:4px}.asup{color:#00695c}.abrk{color:#b71c1c}
 .lbl{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:3px;background:#fff;border:1px solid var(--border);margin-right:4px}
+.emat{width:100%;border-collapse:separate;border-spacing:3px;margin-top:10px;font-family:monospace}
+.emat th{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;padding:2px 4px;text-align:center}
+.emat tbody th{text-align:left;width:48px}
+.emat td{border-radius:5px;padding:5px 6px;text-align:center;line-height:1.25;vertical-align:top;border:1px solid transparent}
+.emat .emv{display:block;font-weight:700;font-size:12px;color:var(--strong)}
+.emat .empct{display:block;font-size:10px}
+.emat .emhr{display:block;font-size:9px;font-weight:700;margin-top:1px}
+.emat .emhrn{opacity:.55;font-weight:400}
+.emsup{background:#e8f5e9}.emsup .empct{color:#00875a}.emsup .emhr{color:#00875a}
+.emres{background:#fdecea}.emres .empct{color:#c62828}.emres .emhr{color:#c62828}
+.emna{background:#f5f5f5;color:#bbb;font-size:10px;vertical-align:middle}
+.emnear{border:2px solid #00a86b;box-shadow:0 0 0 1px #00a86b inset}
 .krow{display:grid;grid-template-columns:200px 200px 1fr 70px;gap:8px;align-items:center;margin-bottom:8px}
 .kname{font-weight:600;color:var(--strong)}.kmask{font-family:monospace;color:var(--muted)}.ksrc{font-size:10px}
 .krow input{padding:6px 8px;border:1px solid var(--border);border-radius:5px}
