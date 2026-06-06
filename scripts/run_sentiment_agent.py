@@ -31,9 +31,14 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
 
+import httpx  # noqa: E402
 import pandas as pd  # noqa: E402
 import yfinance as yf  # noqa: E402
 import keystore  # noqa: E402  (scripts/ is on sys.path[0])
+
+# UTC hours to send a Telegram briefing even if sentiment didn't flip
+# (≈ pre-India-open 03:00 and pre-US-open 13:00 UTC). Comma-list overridable.
+BRIEFING_HOURS = {int(h) for h in os.getenv("SENTIMENT_BRIEFING_HOURS", "3,13").split(",") if h.strip()}
 
 BACKEND = os.getenv("SENTIMENT_BACKEND", "gemini").lower()   # "gemini" (free) | "anthropic"
 MODEL = os.getenv("SENTIMENT_MODEL", "claude-sonnet-4-6")    # anthropic model
@@ -44,10 +49,10 @@ HISTORY = Path("data/sentiment_history.jsonl")
 
 # Assets the agent watches (display -> yfinance ticker)
 ASSETS = {
-    "Dow Jones": "YM=F",
-    "Nasdaq": "NQ=F",
-    "S&P 500": "ES=F",
-    "Nifty 50": "^NSEI",     # Gift Nifty proxy (NSE spot)
+    "Dow Jones": "^DJI",     # spot indices (recognizable values, not futures)
+    "Nasdaq": "^IXIC",
+    "S&P 500": "^GSPC",
+    "Nifty 50": "^NSEI",
     "Bitcoin": "BTC-USD",
     "Gold": "GC=F",
 }
@@ -220,14 +225,16 @@ def run_agent_anthropic() -> dict:
                   "summary": "Agent did not return a structured read.", "drivers": [],
                   "assets": [], "catalysts_ahead": []}
     cost_usd = usage["input_tokens"] / 1e6 * 3.0 + usage["output_tokens"] / 1e6 * 15.0
+    tech = all_technicals()
+    parsed = _enrich_with_technicals(parsed, tech)   # real levels override LLM numbers
     parsed["_meta"] = {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "model": MODEL,
+        "model": MODEL, "backend": "anthropic",
         "tokens_in": usage["input_tokens"], "tokens_out": usage["output_tokens"],
         "web_searches": usage["web_searches"],
         "cost_usd": round(cost_usd, 4), "cost_inr": round(cost_usd * FX, 2),
     }
-    parsed["_technicals"] = all_technicals()
+    parsed["_technicals"] = tech
     return parsed
 
 
@@ -305,6 +312,35 @@ class _Sentiment(BaseModel):
     catalysts_ahead: list[str]
 
 
+_ALIASES = {
+    "Dow Jones": ["dow", "djia"],
+    "Nasdaq": ["nasdaq", "ndx", "ixic", "comp"],
+    "S&P 500": ["s&p", "spx", "gspc", "500"],
+    "Nifty 50": ["nifty"],
+    "Bitcoin": ["bitcoin", "btc"],
+    "Gold": ["gold", "xau"],
+}
+
+
+def _enrich_with_technicals(parsed: dict, tech: dict) -> dict:
+    """
+    Overwrite each asset's NUMERIC levels (price, support) with the REAL computed
+    values from yfinance, so the LLM can never display a hallucinated number.
+    The LLM keeps only its qualitative bias/signal/if_breaks (its judgement).
+    """
+    for a in parsed.get("assets", []):
+        n = (a.get("name") or "").lower()
+        key = next((k for k, al in _ALIASES.items() if k in tech and any(x in n for x in al)), None)
+        t = tech.get(key) if key else None
+        if t and isinstance(t, dict) and "price" in t:
+            a["name"] = key
+            a["price"] = t["price"]
+            a["trend"] = t["trend"]
+            a["rsi"] = t["rsi14"]
+            a["support"] = f"{t['support_20d']:,.0f} (20-day low) · 50 EMA {t['ema50']:,.0f}"
+    return parsed
+
+
 def run_agent_gemini() -> dict:
     from google import genai
     from google.genai import types
@@ -333,6 +369,19 @@ def run_agent_gemini() -> dict:
     )
     analysis = (r1.text or "").strip()
 
+    # GROUNDING GUARD: if Google Search did NOT fire, the model is answering from
+    # stale training memory (the source of the 38,000-Dow hallucination). Reject
+    # so the dispatcher fails over to Claude (which has reliable web search).
+    grounded = False
+    try:
+        gm = r1.candidates[0].grounding_metadata
+        grounded = bool(gm and (getattr(gm, "web_search_queries", None)
+                                or getattr(gm, "grounding_chunks", None)))
+    except Exception:
+        grounded = False
+    if not grounded:
+        raise RuntimeError("Gemini answer was NOT grounded (no web search) — failing over to Claude")
+
     # Step 2 — structure the analysis into strict JSON (no tools).
     r2 = client.models.generate_content(
         model=GEMINI_MODEL,
@@ -346,6 +395,7 @@ def run_agent_gemini() -> dict:
         ),
     )
     parsed = json.loads(r2.text)
+    parsed = _enrich_with_technicals(parsed, tech)   # real levels override any LLM numbers
 
     def _toks(r):
         m = getattr(r, "usage_metadata", None)
@@ -398,12 +448,68 @@ def run_agent() -> dict:
     }
 
 
+def _tesc(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def send_telegram(text: str) -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN"); chat = os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        return
+    try:
+        httpx.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                   json={"chat_id": chat, "text": text, "parse_mode": "HTML",
+                         "disable_web_page_preview": True}, timeout=10)
+    except Exception as e:
+        print("telegram send failed:", e)
+
+
+def format_telegram(r: dict, flipped: bool) -> str:
+    o = (r.get("overall") or "neutral").upper()
+    try:
+        c = float(r.get("confidence") or 0)
+    except (TypeError, ValueError):
+        c = 0.0
+    emoji = {"BULLISH": "🟢", "BEARISH": "🔴", "NEUTRAL": "⚪"}.get(o, "")
+    head = "⚠️ SENTIMENT FLIPPED → " if flipped else "🧭 Market Sentiment: "
+    lines = [f"<b>{head}{o}</b> {emoji} ({c:.0f}%)",
+             f"<i>{_tesc(r.get('why_moving', ''))}</i>", ""]
+    for a in r.get("assets", [])[:6]:
+        sup = _tesc(a.get("support", ""))
+        sup = (sup[:60] + "…") if len(sup) > 60 else sup
+        lines.append(f"• <b>{_tesc(a.get('name'))}</b> [{a.get('bias')}] — supp {sup}")
+    cats = r.get("catalysts_ahead", [])
+    if cats:
+        lines.append("\n📅 " + _tesc("; ".join(str(x) for x in cats[:2])))
+    m = r.get("_meta", {})
+    lines.append(f"\n<code>{m.get('backend', '?')} · ₹{m.get('cost_inr', 0)}</code> · 43.204.64.180:8002")
+    return "\n".join(lines)
+
+
+def _prev_overall() -> str | None:
+    if LATEST.exists():
+        try:
+            return (json.loads(LATEST.read_text()).get("overall") or "").lower() or None
+        except Exception:
+            return None
+    return None
+
+
 def main() -> None:
+    notify_flag = "--notify" in sys.argv
+    prev = _prev_overall()
     print(f"Running market sentiment agent (backend={BACKEND}, "
           f"model={GEMINI_MODEL if BACKEND == 'gemini' else MODEL})...")
     read = run_agent()
     store(read)
     report(read)
+
+    new_overall = (read.get("overall") or "neutral").lower()
+    flipped = prev is not None and prev != new_overall
+    hour = datetime.now(timezone.utc).hour
+    if notify_flag or flipped or hour in BRIEFING_HOURS:
+        send_telegram(format_telegram(read, flipped))
+        print(f"  [telegram sent — {'flip' if flipped else 'briefing/notify'}]")
 
 
 if __name__ == "__main__":

@@ -107,10 +107,18 @@ def render(r: dict | None) -> str:
         for a in r.get("assets", []):
             b = (a.get("bias") or "neutral").lower()
             bc = BIAS_COLOR.get(b, "var(--muted)")
+            pr = a.get("price")
+            priceline = ""
+            if pr is not None:
+                rsi = a.get("rsi"); trend = a.get("trend", "")
+                priceline = (f"<div class='aprice'>{fnum(pr):,.0f}"
+                             f"{' · ' + _esc(trend) if trend else ''}"
+                             f"{' · RSI ' + str(rsi) if rsi is not None else ''}</div>")
             cards += f"""
             <div class="acard">
               <div class="ahead"><span class="aname">{_esc(a.get('name',''))}</span>
                 <span class="abadge" style="background:{bc}1a;color:{bc}">{b}</span></div>
+              {priceline}
               <div class="asig">{_esc(a.get('signal',''))}</div>
               <div class="asup"><span class="lbl">SUPPORT</span> {_esc(a.get('support',''))}</div>
               <div class="abrk"><span class="lbl">IF IT BREAKS</span> {_esc(a.get('if_breaks',''))}</div>
@@ -211,6 +219,7 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .acard{border:1px solid var(--border);border-radius:8px;padding:12px;background:#fafafa}
 .ahead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .aname{font-weight:700;color:var(--strong)}.abadge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}
+.aprice{font-family:monospace;font-weight:700;color:var(--strong);margin-bottom:6px}
 .asig{color:var(--text);line-height:1.5;margin-bottom:8px}
 .asup,.abrk{font-size:12px;line-height:1.5;margin-top:4px}.asup{color:#00695c}.abrk{color:#b71c1c}
 .lbl{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:3px;background:#fff;border:1px solid var(--border);margin-right:4px}
