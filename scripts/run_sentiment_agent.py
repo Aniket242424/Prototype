@@ -74,15 +74,22 @@ ASSETS = {
 # ============================================================
 
 def _rsi(close: pd.Series, n: int = 14) -> float:
+    # Wilder's RSI (RMA = ewm with alpha=1/n) — this is what TradingView, brokers
+    # and charting platforms show. A plain rolling mean diverges by up to ~10 points
+    # (e.g. BTC: simple-mean 5.5 vs Wilder 15.2) and would mislead the agent.
     d = close.diff()
-    up = d.clip(lower=0).rolling(n).mean()
-    dn = (-d.clip(upper=0)).rolling(n).mean()
+    up = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    dn = (-d.clip(upper=0)).ewm(alpha=1 / n, adjust=False).mean()
     rs = up / dn.replace(0, 1e-9)
     return float((100 - 100 / (1 + rs)).iloc[-1])
 
 
 def compute_one(ticker: str) -> dict:
-    df = yf.download(ticker, period="1y", interval="1d", progress=False, auto_adjust=False)
+    # 3y of daily bars: a 200-EMA needs ~3x its span to converge. With only 1y
+    # (~251 bars) the 200-EMA carries 0.2-0.5% seed-warmup error. 3y (~750 bars)
+    # drives that residual below ~0.06%. 20-day support / 1-5d change use tail()
+    # so they're unaffected by the longer window.
+    df = yf.download(ticker, period="3y", interval="1d", progress=False, auto_adjust=False)
     if df.empty:
         return {"error": "no data"}
     if isinstance(df.columns, pd.MultiIndex):
