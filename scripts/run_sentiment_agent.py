@@ -23,7 +23,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -451,7 +451,8 @@ def run_agent_anthropic() -> dict:
     tools = [SUBMIT_TOOL, {"type": "web_search_20250305", "name": "web_search", "max_uses": 6}]
     messages = [{"role": "user", "content": (
         "CURRENT TECHNICAL LEVELS (already computed — use these for support/resistance):\n"
-        + json.dumps(tech, indent=2) +
+        + json.dumps(tech, indent=2)
+        + track_record_prompt() +
         "\n\nNow web_search for the live market-moving news (Fed, jobs/inflation data, war/"
         "geopolitics, big-tech/chips, policy), then call submit_sentiment. EVERY asset above "
         "must appear in your read with its support level and what happens if support breaks.")}]
@@ -546,6 +547,230 @@ def report(r: dict) -> None:
         print(f"    - {c}")
     print(f"  [model={m.get('model')} · {m.get('web_searches')} searches · "
           f"{m.get('tokens_in')}+{m.get('tokens_out')} tok · ₹{m.get('cost_inr')}]")
+
+
+# ============================================================
+# Context memory: self-grading feedback loop (backend-independent)
+# ----------------------------------------------------------------
+# Every run logs its prediction (overall bias + per-asset bias + the support it
+# named, with the PRICE AT PREDICTION). One trading day later, grade_predictions()
+# fetches the actual move from yfinance and marks each call correct/wrong — purely
+# deterministic, no LLM, so the track record is identical regardless of which
+# backend produced the read. track_record_prompt() feeds the aggregate accuracy
+# back into the next run so the agent calibrates ("smarter day by day").
+# ============================================================
+PREDICTIONS = Path("data/predictions.jsonl")
+SCORES = Path("data/prediction_scores.jsonl")
+_INDEX_ASSETS = {"Dow Jones", "Nasdaq 100", "S&P 500", "Nifty 50", "Bank Nifty"}
+
+
+def _read_jsonl(path: Path) -> list:
+    out = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    pass
+    return out
+
+
+def _append_jsonl(path: Path, rec: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def log_prediction(read: dict) -> None:
+    """Snapshot this run's prediction + the price/support it's based on, for later grading."""
+    tech = read.get("_technicals", {}) or {}
+    assets = []
+    for a in read.get("assets", []):
+        name = a.get("name")
+        t = tech.get(name) or {}
+        if "price" not in t:
+            continue
+        ns = t.get("nearest_support") or {}
+        assets.append({"name": name, "ticker": ASSETS.get(name, ""),
+                       "bias": _norm_bias(a.get("bias")),
+                       "price": t.get("price"), "support": ns.get("value")})
+    ts = (read.get("_meta") or {}).get("as_of") or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _append_jsonl(PREDICTIONS, {"id": ts, "ts": ts,
+                                "overall": _norm_bias(read.get("overall")),
+                                "confidence": float(read.get("confidence") or 0),
+                                "assets": assets, "graded": False})
+
+
+def _norm_bias(b: str) -> str:
+    """Normalize free-text bias (Claude may emit 'neutral-to-bearish') to one of
+    bullish/bearish/neutral so grading is consistent across backends."""
+    b = (b or "").lower()
+    if "bull" in b:
+        return "bullish"
+    if "bear" in b:
+        return "bearish"
+    return "neutral"
+
+
+def _bias_correct(bias: str, move_pct: float, thr: float) -> bool:
+    if bias == "bullish":
+        return move_pct > thr
+    if bias == "bearish":
+        return move_pct < -thr
+    return abs(move_pct) <= thr   # neutral = stayed roughly flat
+
+
+def grade_predictions(horizon_days: int = 1) -> int:
+    """Grade every ungraded prediction that has matured (>= horizon_days old) against
+    the REAL forward move (next trading day's close vs the price at prediction)."""
+    preds = _read_jsonl(PREDICTIONS)
+    ungraded = [p for p in preds if not p.get("graded")]
+    if not ungraded:
+        return 0
+    now = datetime.now(timezone.utc)
+    tickers = {a.get("ticker") for p in ungraded for a in p.get("assets", []) if a.get("ticker")}
+    hist = {}
+    for tk in tickers:
+        try:
+            d = yf.download(tk, period="6mo", interval="1d", progress=False, auto_adjust=False)
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = [c[0] for c in d.columns]
+            hist[tk] = d["Close"].dropna()
+        except Exception:
+            hist[tk] = None
+
+    def _fwd_close(tk, d0):
+        c = hist.get(tk)
+        if c is None:
+            return None
+        for idx, val in zip(c.index, c.values):     # first trading bar strictly AFTER prediction date
+            if idx.date() > d0:
+                return float(val)
+        return None   # no future bar yet -> still pending
+
+    graded_ids = set()
+    for p in ungraded:
+        try:
+            ts = datetime.fromisoformat(str(p["ts"]).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if (now - ts) < timedelta(days=horizon_days):
+            continue   # too recent to grade
+        d0 = ts.date()
+        asset_scores, index_moves, pending = [], [], False
+        for a in p.get("assets", []):
+            p0 = a.get("price")
+            if not p0 or not a.get("ticker"):
+                continue
+            p1 = _fwd_close(a["ticker"], d0)
+            if p1 is None:
+                pending = True
+                break
+            move = (p1 / float(p0) - 1) * 100
+            thr = 1.0 if a["ticker"] in _HIVOL else 0.3
+            sup = a.get("support")
+            asset_scores.append({"name": a["name"], "bias": a.get("bias", "neutral"),
+                                 "p0": round(float(p0), 2), "p1": round(p1, 2), "move_pct": round(move, 2),
+                                 "correct": _bias_correct(a.get("bias", "neutral"), move, thr),
+                                 "support": sup, "support_held": (p1 >= sup if sup else None)})
+            if a["name"] in _INDEX_ASSETS:
+                index_moves.append(move)
+        if pending:
+            continue   # leave ungraded; a later run will grade it once data exists
+        avg = (sum(index_moves) / len(index_moves)) if index_moves else None
+        overall_correct = (_bias_correct(p.get("overall", "neutral"), avg, 0.3)
+                           if avg is not None else None)
+        _append_jsonl(SCORES, {"id": p["id"], "ts": p["ts"], "overall": p.get("overall"),
+                               "confidence": p.get("confidence"), "horizon_days": horizon_days,
+                               "avg_index_move_pct": (round(avg, 2) if avg is not None else None),
+                               "overall_correct": overall_correct, "assets": asset_scores})
+        graded_ids.add(p["id"])
+
+    if graded_ids:
+        for p in preds:
+            if p.get("id") in graded_ids:
+                p["graded"] = True
+        keep = preds[-5000:]   # bound file growth
+        PREDICTIONS.write_text("\n".join(json.dumps(x) for x in keep) + "\n", encoding="utf-8")
+    return len(graded_ids)
+
+
+def track_record_stats(days: int = 60, max_recent: int = 5) -> dict:
+    """Aggregate graded scores into the track record shown to the agent + dashboard."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rec = []
+    for s in _read_jsonl(SCORES):
+        try:
+            t = datetime.fromisoformat(str(s["ts"]).replace("Z", "+00:00"))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if t >= cutoff:
+            rec.append(s)
+    if not rec:
+        return {}
+    ov = [s for s in rec if s.get("overall_correct") is not None]
+    overall_n = len(ov)
+    overall_ok = sum(1 for s in ov if s["overall_correct"])
+    hi = [s for s in ov if (s.get("confidence") or 0) >= 70]
+
+    def _acc(lst):
+        return round(100 * sum(1 for s in lst if s["overall_correct"]) / len(lst)) if lst else None
+
+    per = {}
+    for s in rec:
+        for a in s.get("assets", []):
+            d = per.setdefault(a["name"], {"n": 0, "ok": 0, "sn": 0, "sh": 0})
+            d["n"] += 1
+            d["ok"] += 1 if a.get("correct") else 0
+            if a.get("support_held") is not None:
+                d["sn"] += 1
+                d["sh"] += 1 if a["support_held"] else 0
+    per_out = {k: {"n": v["n"], "acc": round(100 * v["ok"] / v["n"]) if v["n"] else None,
+                   "support_hold": round(100 * v["sh"] / v["sn"]) if v["sn"] else None}
+               for k, v in per.items()}
+    sn = sum(v["sn"] for v in per.values())
+    sh = sum(v["sh"] for v in per.values())
+    misses = [s for s in reversed(rec) if s.get("overall_correct") is False][:max_recent]
+    return {"days": days, "overall_n": overall_n,
+            "overall_acc": round(100 * overall_ok / overall_n) if overall_n else None,
+            "high_conf_acc": _acc(hi), "high_conf_n": len(hi),
+            "per_asset": per_out,
+            "support_acc": round(100 * sh / sn) if sn else None, "support_n": sn,
+            "recent_misses": [{"ts": str(s["ts"])[:10], "said": s["overall"],
+                               "conf": s.get("confidence"), "move": s.get("avg_index_move_pct")}
+                              for s in misses]}
+
+
+def track_record_prompt() -> str:
+    """The track record, formatted for injection into the agent prompt (both backends)."""
+    s = track_record_stats()
+    if not s or not s.get("overall_n"):
+        return ""
+    L = [f"YOUR TRACK RECORD (last {s['days']} days, graded against real moves — calibrate to it, be honest):",
+         f"- Overall directional accuracy: {s['overall_acc']}% over {s['overall_n']} graded calls."]
+    if s.get("high_conf_acc") is not None:
+        tail = (" — your high-confidence calls are NOT actually more reliable, so don't inflate confidence."
+                if (s["high_conf_acc"] or 0) <= (s["overall_acc"] or 0) else ".")
+        L.append(f"- High-confidence (>=70%) calls: {s['high_conf_acc']}% over {s['high_conf_n']} calls{tail}")
+    if s.get("support_acc") is not None:
+        L.append(f"- The nearest-support levels you named HELD {s['support_acc']}% of the time ({s['support_n']} tested).")
+    weak = [f"{k} {v['acc']}%" for k, v in sorted(
+        s["per_asset"].items(), key=lambda kv: kv[1]["acc"] if kv[1]["acc"] is not None else 100)
+        if v["acc"] is not None][:3]
+    if weak:
+        L.append(f"- Weakest per-asset accuracy: {', '.join(weak)} — be more cautious calling these.")
+    if s.get("recent_misses"):
+        m = s["recent_misses"][0]
+        mv = f"{m['move']:+.1f}%" if m.get("move") is not None else "?"
+        L.append(f"- Recent miss: on {m['ts']} you said {str(m['said']).upper()} ({m['conf']}%) but the market moved {mv}.")
+    L.append("Set today's confidence honestly in light of this. If a pattern shows you've been wrong, say so.")
+    return "\n\n" + "\n".join(L) + "\n"
 
 
 # ============================================================
@@ -672,7 +897,8 @@ def run_agent_gemini(model: str | None = None, api_key: str | None = None) -> di
     # Step 1 — research with Google Search grounding -> veteran analysis (text).
     research = (
         "CURRENT TECHNICAL LEVELS (use these for support/resistance):\n"
-        + json.dumps(tech, indent=2) +
+        + json.dumps(tech, indent=2)
+        + track_record_prompt() +
         "\n\nUse Google Search to find the live market-moving news (Fed/rates, jobs & inflation "
         "data, war/geopolitics, big-tech/chips, policy), then write your complete market read per "
         "your instructions. Cover every asset above with its support level and what happens if it breaks."
@@ -832,11 +1058,24 @@ def main() -> None:
 
     notify_flag = "--notify" in sys.argv
     prev = _prev_overall()
+    # Grade matured past predictions FIRST so this run's prompt sees an up-to-date
+    # track record (self-improvement loop — deterministic, backend-independent).
+    try:
+        n = grade_predictions()
+        if n:
+            print(f"  [graded {n} matured prediction(s) against real moves]")
+    except Exception as e:
+        print(f"  [grading skipped: {e}]")
     print(f"Running market sentiment agent (backend={BACKEND}, "
           f"model={GEMINI_MODEL if BACKEND == 'gemini' else MODEL})...")
     read = run_agent()
     store(read)
     report(read)
+    # Log this prediction for grading ~1 trading day from now.
+    try:
+        log_prediction(read)
+    except Exception as e:
+        print(f"  [log_prediction failed: {e}]")
 
     # Record token usage per backend (for the UI + Anthropic budget cap).
     m = read.get("_meta", {})

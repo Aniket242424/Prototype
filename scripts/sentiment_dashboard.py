@@ -45,8 +45,10 @@ _LOOKUP_CACHE: dict = {}
 _LOOKUP_TTL = 600  # seconds
 try:
     from run_sentiment_agent import lookup_scrip as _lookup_scrip
+    from run_sentiment_agent import track_record_stats as _track_record_stats
 except Exception:
     _lookup_scrip = None
+    _track_record_stats = None
 
 
 def cached_lookup(q: str) -> dict:
@@ -162,6 +164,51 @@ def _lookup_html(d: dict) -> str:
             sup += f"<div class='lkres'>▼ RESISTANCE {cr.get('value', 0):,.2f} ({_esc(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)</div>"
     table = _ema_table(d.get("matrix"), ns.get("members"))
     return head + sup + table
+
+
+def _trackrecord_panel() -> str:
+    """Self-improvement scorecard: the agent's graded accuracy over time."""
+    if _track_record_stats is None:
+        return ""
+    try:
+        s = _track_record_stats()
+    except Exception:
+        s = {}
+    if not s or not s.get("overall_n"):
+        return ("<div class='panel'><div class='panel-title'>🧠 Agent track record "
+                "<span class='muted'>· self-improving</span></div>"
+                "<div class='muted'>Building track record — every run's prediction is graded against the "
+                "real market move ~1 trading day later, then fed back so the agent calibrates. "
+                "Stats appear here once the first calls mature.</div></div>")
+
+    def _pill(label, val, n=None):
+        if val is None:
+            return ""
+        col = "#00875a" if val >= 60 else "#b7791f" if val >= 45 else "#c62828"
+        sub = f" <span class='muted'>({n})</span>" if n else ""
+        return (f"<div class='trpill'><div class='trv' style='color:{col}'>{val}%</div>"
+                f"<div class='trl'>{label}{sub}</div></div>")
+    pills = (_pill("Overall accuracy", s.get("overall_acc"), f"{s.get('overall_n')} calls")
+             + _pill("High-confidence", s.get("high_conf_acc"), f"{s.get('high_conf_n')}")
+             + _pill("Support held", s.get("support_acc"), f"{s.get('support_n')}"))
+    pa = s.get("per_asset", {})
+    arows = "".join(
+        f"<tr><td>{_esc(k)}</td><td>{(v['acc'] if v['acc'] is not None else '–')}"
+        f"{'%' if v['acc'] is not None else ''}</td><td class='muted'>{v['n']}</td>"
+        f"<td>{(str(v['support_hold'])+'%') if v.get('support_hold') is not None else '–'}</td></tr>"
+        for k, v in sorted(pa.items(), key=lambda kv: kv[1]['acc'] if kv[1]['acc'] is not None else -1, reverse=True))
+    atable = (f"<table class='ktbl' style='margin-top:10px'><thead><tr><th>asset</th><th>dir. acc</th>"
+              f"<th>calls</th><th>support held</th></tr></thead><tbody>{arows}</tbody></table>") if arows else ""
+    misses = s.get("recent_misses", [])
+    miss_html = ""
+    if misses:
+        items = "".join(
+            f"<li>{m['ts']}: said <b>{_esc(str(m['said']).upper())}</b> ({m.get('conf')}%) → market "
+            f"{(('%+.1f%%' % m['move']) if m.get('move') is not None else '?')}</li>" for m in misses)
+        miss_html = f"<div class='trmiss'><div class='muted'>Recent misses (it learns from these):</div><ul class='lst'>{items}</ul></div>"
+    return (f"<div class='panel'><div class='panel-title'>🧠 Agent track record "
+            f"<span class='muted'>· last {s.get('days')}d · graded vs real moves · fed back to calibrate</span></div>"
+            f"<div class='trrow'>{pills}</div>{atable}{miss_html}</div>")
 
 
 def render(r: dict | None) -> str:
@@ -287,6 +334,7 @@ def render(r: dict | None) -> str:
     </div>
     <div id="lookout" class="lookout"></div>
   </div>
+{_trackrecord_panel()}
 {body}{keypanel}
   <div class="foot">Gemini (free) → Claude (fallback) → neutral. Not financial advice. Auto-refreshes every 20s.</div>
 </main>
@@ -412,6 +460,11 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .lksup{font-size:12px;margin:6px 0;color:#00695c}.lkres{font-size:12px;margin:2px 0;color:#b71c1c}
 .lkerr{color:#b71c1c;font-size:13px;padding:8px;background:#fdecea;border-radius:6px}
 .lkbadge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px}
+.trrow{display:flex;gap:18px;flex-wrap:wrap}
+.trpill{text-align:center;min-width:96px}
+.trpill .trv{font-size:26px;font-weight:800;line-height:1}
+.trpill .trl{font-size:11px;color:var(--muted);margin-top:3px}
+.trmiss{margin-top:10px;font-size:12px}.trmiss .lst{margin:4px 0 0;color:#b71c1c}
 .krow{display:grid;grid-template-columns:200px 200px 1fr 70px;gap:8px;align-items:center;margin-bottom:8px}
 .kname{font-weight:600;color:var(--strong)}.kmask{font-family:monospace;color:var(--muted)}.ksrc{font-size:10px}
 .krow input{padding:6px 8px;border:1px solid var(--border);border-radius:5px}
