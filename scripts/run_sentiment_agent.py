@@ -31,11 +31,13 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
 
-import anthropic  # noqa: E402
 import pandas as pd  # noqa: E402
 import yfinance as yf  # noqa: E402
+import keystore  # noqa: E402  (scripts/ is on sys.path[0])
 
-MODEL = os.getenv("SENTIMENT_MODEL", "claude-sonnet-4-6")
+BACKEND = os.getenv("SENTIMENT_BACKEND", "gemini").lower()   # "gemini" (free) | "anthropic"
+MODEL = os.getenv("SENTIMENT_MODEL", "claude-sonnet-4-6")    # anthropic model
+GEMINI_MODEL = os.getenv("SENTIMENT_GEMINI_MODEL", "gemini-2.5-flash")
 FX = float(os.getenv("DELTA_IC_FX_INR_USD", "84"))
 LATEST = Path("data/sentiment_latest.json")
 HISTORY = Path("data/sentiment_history.jsonl")
@@ -166,11 +168,15 @@ INDEX HEAVYWEIGHTS you must reason with (approximate weights; web-search if you 
 
 Be specific and cite what you saw. Avoid hedging mush. If it's genuinely mixed, say neutral.
 
-When you have done your research, FINISH by calling the submit_sentiment tool with your final structured read (every asset MUST include support + if_breaks). Do not write a prose report — the submit_sentiment call IS your answer."""
+Produce a complete, decisive read covering: overall bias (bullish/bearish/neutral) + confidence %, the single dominant driver (why the market is moving — e.g. profit booking / Fed rate cut hopes / hot CPI / war escalation), the key drivers (3-5 bullets), per-asset signals (each with an explicit SUPPORT level and what happens IF it breaks, including which heavyweight stock or positive catalyst could lift it), and the catalysts ahead. Be specific with numbers and levels."""
 
 
-def run_agent() -> dict:
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+def run_agent_anthropic() -> dict:
+    import anthropic
+    key = keystore.get_key("anthropic_api_key", "ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("No Anthropic key set (UI or ANTHROPIC_API_KEY)")
+    client = anthropic.Anthropic(api_key=key)
     # Pre-compute technicals and inject them, so the agent always has the levels
     # (and never submits empty per-asset signals for lack of data).
     tech = all_technicals()
@@ -272,8 +278,129 @@ def report(r: dict) -> None:
           f"{m.get('tokens_in')}+{m.get('tokens_out')} tok · ₹{m.get('cost_inr')}]")
 
 
+# ============================================================
+# Gemini backend (FREE) — Google Search grounding + structured output
+# ============================================================
+from typing import Literal  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
+
+Bias = Literal["bullish", "bearish", "neutral"]
+
+
+class _Asset(BaseModel):
+    name: str
+    bias: Bias
+    signal: str
+    support: str
+    if_breaks: str
+
+
+class _Sentiment(BaseModel):
+    overall: Bias
+    confidence: int
+    why_moving: str
+    summary: str
+    drivers: list[str]
+    assets: list[_Asset]
+    catalysts_ahead: list[str]
+
+
+def run_agent_gemini() -> dict:
+    from google import genai
+    from google.genai import types
+
+    key = keystore.get_key("gemini_api_key", "GEMINI_API_KEY")
+    if not key:
+        raise RuntimeError("No Gemini key set (UI or GEMINI_API_KEY)")
+    client = genai.Client(api_key=key)
+    tech = all_technicals()
+
+    # Step 1 — research with Google Search grounding -> veteran analysis (text).
+    research = (
+        "CURRENT TECHNICAL LEVELS (use these for support/resistance):\n"
+        + json.dumps(tech, indent=2) +
+        "\n\nUse Google Search to find the live market-moving news (Fed/rates, jobs & inflation "
+        "data, war/geopolitics, big-tech/chips, policy), then write your complete market read per "
+        "your instructions. Cover every asset above with its support level and what happens if it breaks."
+    )
+    r1 = client.models.generate_content(
+        model=GEMINI_MODEL, contents=research,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM,
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            temperature=0.3, max_output_tokens=6000,
+        ),
+    )
+    analysis = (r1.text or "").strip()
+
+    # Step 2 — structure the analysis into strict JSON (no tools).
+    r2 = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=("Convert this market analysis into the required JSON. Keep it faithful. "
+                  "Include ALL SIX assets (Dow Jones, Nasdaq, S&P 500, Nifty 50, Bitcoin, Gold), "
+                  "each with support + if_breaks. For every asset, 'bias' must be EXACTLY one of: "
+                  "bullish, bearish, neutral (never 'uptrend'/'downtrend').\n\n" + analysis),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json", response_schema=_Sentiment,
+            temperature=0.0, max_output_tokens=8000,
+        ),
+    )
+    parsed = json.loads(r2.text)
+
+    def _toks(r):
+        m = getattr(r, "usage_metadata", None)
+        return ((getattr(m, "prompt_token_count", 0) or 0),
+                (getattr(m, "candidates_token_count", 0) or 0))
+    i1, o1 = _toks(r1); i2, o2 = _toks(r2)
+    parsed["_meta"] = {
+        "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "model": GEMINI_MODEL, "backend": "gemini",
+        "tokens_in": i1 + i2, "tokens_out": o1 + o2,
+        "web_searches": "google-grounded",
+        "cost_usd": 0.0, "cost_inr": 0.0,   # free tier
+    }
+    parsed["_technicals"] = tech
+    return parsed
+
+
+def run_agent() -> dict:
+    """
+    Run the primary backend; if it fails for ANY reason (rate limit, outage,
+    bad key, parse error), automatically fall back to the other one. If both
+    fail, return a safe neutral read — the system must never crash.
+    """
+    order = ([("gemini", run_agent_gemini), ("anthropic", run_agent_anthropic)]
+             if BACKEND != "anthropic" else
+             [("anthropic", run_agent_anthropic), ("gemini", run_agent_gemini)])
+    errors = []
+    for i, (name, fn) in enumerate(order):
+        try:
+            read = fn()
+            if i > 0:  # we fell back
+                read.setdefault("_meta", {})["fell_back_from"] = order[0][0]
+                read.setdefault("_meta", {})["fallback_reason"] = errors[-1] if errors else ""
+            return read
+        except Exception as e:
+            msg = f"{name}: {type(e).__name__}: {str(e)[:200]}"
+            errors.append(msg)
+            print(f"  [backend {name} FAILED -> trying fallback] {msg}")
+    # both backends failed — degrade gracefully, do not crash
+    return {
+        "overall": "neutral", "confidence": 0,
+        "why_moving": "both LLM backends unavailable",
+        "summary": "Sentiment agent could not run (both Gemini and Claude failed). "
+                   "Last errors: " + " | ".join(errors),
+        "drivers": [], "assets": [], "catalysts_ahead": [],
+        "_meta": {"as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "backend": "none", "error": True, "errors": errors,
+                  "tokens_in": 0, "tokens_out": 0, "cost_inr": 0.0},
+        "_technicals": all_technicals(),
+    }
+
+
 def main() -> None:
-    print(f"Running market sentiment agent (model={MODEL})...")
+    print(f"Running market sentiment agent (backend={BACKEND}, "
+          f"model={GEMINI_MODEL if BACKEND == 'gemini' else MODEL})...")
     read = run_agent()
     store(read)
     report(read)
