@@ -108,6 +108,10 @@ async def token_watcher_loop(
 
 async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
     """Single tick of the watcher. Idempotent — safe to call repeatedly."""
+    # Indian markets (NSE/BSE) are closed on weekends, so the bot doesn't need
+    # an Upstox token — don't nag the operator for a re-auth on Sat/Sun.
+    if now_ist().weekday() >= 5:  # 5 = Saturday, 6 = Sunday
+        return
     # Load the most recent token row from DB (we have at most one user typically)
     async with session_scope() as session:
         row = (
