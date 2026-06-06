@@ -455,6 +455,7 @@ def run_agent_gemini(model: str | None = None, api_key: str | None = None) -> di
     parsed["_meta"] = {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "model": model, "backend": "gemini",
+        "gemini_key": keystore.mask_key(key),   # which key was active this run
         "tokens_in": i1 + i2, "tokens_out": o1 + o2,
         "web_searches": "google-grounded",
         "cost_usd": 0.0, "cost_inr": 0.0,   # free tier

@@ -136,6 +136,34 @@ def set_gemini_keys(keys: list[str]) -> None:
         pass
 
 
+def _ui_gemini_keys() -> list[str]:
+    """Just the UI-saved Gemini key list (no env)."""
+    e = _load().get("gemini_api_keys")
+    if not e:
+        return []
+    if e.get("enc"):
+        fr = _fernet()
+        if fr:
+            try:
+                return json.loads(fr.decrypt(e["val"].encode()).decode())
+            except Exception:
+                return []
+        return []
+    return e.get("val") if isinstance(e.get("val"), list) else []
+
+
+def add_gemini_keys(new_keys: list[str]) -> int:
+    """APPEND keys to the UI list (dedup), so adding one at a time works.
+    Returns the new total count of UI keys."""
+    merged = _ui_gemini_keys() + [k.strip() for k in new_keys if k and k.strip()]
+    seen, out = set(), []
+    for k in merged:
+        if k and k not in seen:
+            seen.add(k); out.append(k)
+    set_gemini_keys(out)
+    return len(out)
+
+
 def get_gemini_keys() -> list[str]:
     """All Gemini keys: UI list + UI single + env (GEMINI_API_KEY[_2/_3/_4]), deduped."""
     keys: list[str] = []
@@ -161,6 +189,23 @@ def get_gemini_keys() -> list[str]:
     for k in keys:
         if k and k not in seen:
             seen.add(k); out.append(k)
+    return out
+
+
+def mask_key(k: str) -> str:
+    return (k[:8] + "…" + k[-4:]) if k and len(k) > 12 else ("set" if k else "")
+
+
+def gemini_key_list() -> list[dict]:
+    """Each Gemini key in rotation order: {masked, source(ui/env)}."""
+    ui = set(_ui_gemini_keys())
+    env_vals = {os.getenv(x) for x in
+                ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4")
+                if os.getenv(x)}
+    out = []
+    for i, k in enumerate(get_gemini_keys()):
+        src = "ui" if k in ui else ("env" if k in env_vals else "ui")
+        out.append({"idx": i + 1, "masked": mask_key(k), "source": src})
     return out
 
 

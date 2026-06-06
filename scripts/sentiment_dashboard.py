@@ -79,6 +79,14 @@ def render(r: dict | None) -> str:
     a_cost = au.get("cost_inr", 0.0)
     a_used = f"{au.get('calls', 0)} runs · ₹{a_cost:.0f} of ₹{ANTHROPIC_BUDGET_INR:.0f} budget"
     a_over = a_cost >= ANTHROPIC_BUDGET_INR
+    active_key = (r or {}).get("_meta", {}).get("gemini_key", "")
+    _rows = ""
+    for k in keystore.gemini_key_list():
+        act = (k["masked"] == active_key)
+        _rows += (f"<tr class='{'kact' if act else ''}'><td>{k['idx']}</td><td>{k['masked']}</td>"
+                  f"<td>{k['source']}</td><td>{'● active (last run)' if act else 'idle'}</td></tr>")
+    gkeys_table = (f"<table class='ktbl'><thead><tr><th>#</th><th>key</th><th>source</th><th>status</th></tr></thead>"
+                   f"<tbody>{_rows}</tbody></table>") if _rows else "<div class='muted'>no Gemini keys yet</div>"
 
     if not r:
         body = "<div class='panel'><div class='empty'>No sentiment read yet. Click <b>Run now</b>.</div></div>"
@@ -145,11 +153,12 @@ def render(r: dict | None) -> str:
     <div class="panel">
       <div class="panel-title">API keys &amp; usage <span class="muted">· set from here, encrypted at rest · keys/usage survive any model change</span></div>
       <div class="kblock">
-        <div class="kname">Gemini <span class="muted">(free, primary — paste 1-3 keys, one per line, from different Gmails for rotation)</span></div>
-        <div class="kmask">{g_summary}</div>
+        <div class="kname">Gemini <span class="muted">(free, primary — keys from different Gmails rotate automatically. Each Save ADDS to the list.)</span></div>
+        {gkeys_table}
         <div class="kusage">usage: {g_used}</div>
-        <textarea id="gkeys" rows="3" placeholder="AIza...key1&#10;AIza...key2&#10;AIza...key3"></textarea>
-        <button onclick="saveGeminiKeys()">Save Gemini keys</button>
+        <textarea id="gkeys" rows="3" placeholder="paste 1+ keys, one per line (AQ.… or AIza…) — adds to the list"></textarea>
+        <button onclick="saveGeminiKeys()">Add Gemini keys</button>
+        <button onclick="clearGeminiKeys()" class="rstbtn">Clear all</button>
       </div>
       <div class="kblock">
         <div class="kname">Claude / Anthropic <span class="muted">(paid fallback — only used if all Gemini keys fail)</span></div>
@@ -192,6 +201,12 @@ async function saveGeminiKeys(){{
       body:JSON.stringify({{name:'gemini_keys',value:v}})}}); const d=await r.json();
     el.textContent = d.ok ? ('✓ saved '+(d.count||'')+' Gemini key(s) — reloading…') : ('error: '+(d.error||''));
     if(d.ok) setTimeout(()=>location.reload(),900);
+  }}catch(e){{ el.textContent='error: '+e; }}
+}}
+async function clearGeminiKeys(){{
+  const el=document.getElementById('ksave'); el.textContent='clearing…';
+  try{{ await fetch('/api/cleargemini',{{method:'POST'}}); el.textContent='✓ cleared UI keys — reloading…';
+    setTimeout(()=>location.reload(),700);
   }}catch(e){{ el.textContent='error: '+e; }}
 }}
 async function resetUsage(){{
@@ -260,6 +275,10 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .kblock textarea{width:100%;max-width:520px;font-family:monospace;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;display:block;margin-bottom:6px}
 .kblock button{background:var(--strong);color:#fff;border:none;border-radius:5px;padding:6px 12px;cursor:pointer;margin-right:6px}
 .rstbtn{background:#fff !important;color:var(--muted) !important;border:1px solid var(--border) !important}
+.ktbl{width:100%;max-width:520px;border-collapse:collapse;font-size:12px;margin:6px 0}
+.ktbl th{text-align:left;color:var(--muted);font-weight:600;font-size:10px;text-transform:uppercase;padding:4px 8px;border-bottom:1px solid var(--border)}
+.ktbl td{padding:5px 8px;border-bottom:1px solid #f3f3f3;font-family:monospace}
+.ktbl tr.kact td{background:var(--green-soft,#e8f5e9);color:var(--green);font-weight:700}
 .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:8px}
 @media(max-width:760px){.agrid{grid-template-columns:1fr}.krow{grid-template-columns:1fr}}
 """
@@ -308,8 +327,8 @@ class Handler(BaseHTTPRequestHandler):
                 name = body.get("name"); val = body.get("value")
                 if name == "gemini_keys" and val:
                     keys = [k.strip() for k in str(val).replace(",", "\n").splitlines() if k.strip()]
-                    keystore.set_gemini_keys(keys)
-                    self._send(json.dumps({"ok": True, "count": len(keys)}).encode(), "application/json")
+                    total = keystore.add_gemini_keys(keys)   # APPEND (not replace)
+                    self._send(json.dumps({"ok": True, "count": total}).encode(), "application/json")
                 elif name in ("gemini_api_key", "anthropic_api_key") and val:
                     keystore.set_key(name, val.strip())
                     self._send(json.dumps({"ok": True}).encode(), "application/json")
@@ -318,6 +337,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/resetusage":
                 keystore.reset_usage()
+                self._send(json.dumps({"ok": True}).encode(), "application/json")
+                return
+            if self.path == "/api/cleargemini":
+                keystore.set_gemini_keys([])
                 self._send(json.dumps({"ok": True}).encode(), "application/json")
                 return
             if self.path == "/api/run":
