@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -49,6 +50,11 @@ TELEGRAM_API = "https://api.telegram.org"
 LONG_POLL_TIMEOUT_SEC = 25
 HTTP_TIMEOUT_SEC = LONG_POLL_TIMEOUT_SEC + 10
 BACKOFF_SCHEDULE_SEC = [1, 2, 4, 8, 16, 30]
+
+# /scrip <symbol> -> calls the host sentiment dashboard's lookup API (the engine
+# with yfinance lives on the host, not in this container). Default = docker bridge
+# gateway; override via SCRIP_LOOKUP_URL if the compose network gateway differs.
+SCRIP_LOOKUP_URL = os.getenv("SCRIP_LOOKUP_URL", "http://172.18.0.1:8002/api/lookup")
 
 
 @dataclass
@@ -135,7 +141,9 @@ async def _handle_start(bot_token: str, chat_id: int) -> None:
             "<b>Trading agent — auth bot</b>\n\n"
             "Commands:\n"
             "<code>/token &lt;access_token&gt;</code> — store fresh Upstox token\n"
-            "<code>/status</code> — show current token state\n\n"
+            "<code>/status</code> — show current token state\n"
+            "<code>/scrip &lt;name&gt;</code> — EMA support table for any scrip "
+            "(e.g. <code>/scrip reliance</code>, <code>/scrip nifty</code>)\n\n"
             "To get a token: open "
             '<a href="https://account.upstox.com/developer/apps">Upstox apps</a> '
             "and tap <b>Generate</b> next to Access Token, then send it here as:\n"
@@ -257,6 +265,72 @@ async def _handle_token(
     )
 
 
+def _format_scrip(d: dict) -> str:
+    """Format a scrip-lookup JSON (from the host /api/lookup) into a Telegram
+    message: header, support/resistance, and a monospace EMA table."""
+    if not d or d.get("error"):
+        return f"❌ {html.escape((d or {}).get('error', 'lookup failed'))}"
+    name = html.escape(str(d.get("name", "")))
+    tk = html.escape(str(d.get("ticker", "")))
+    price = d.get("price") or 0
+    rsi = d.get("rsi14")
+    ns = d.get("nearest_support") or {}
+    sf = d.get("structural_floor") or {}
+    cr = d.get("controlling_resistance") or {}
+    head = (f"📊 <b>{name}</b> <code>[{tk}]</code>\n"
+            f"{price:,.2f} · RSI {rsi} · {html.escape(str(d.get('trend', '')))}"
+            f" · {html.escape(str(d.get('stack_daily', '')))} stack")
+    if d.get("no_ema_support") and ns:
+        sup = (f"\n\n⚠ <b>NO EMA support</b> — below every EMA.\n"
+               f"Floor {ns.get('value', 0):,.2f} (20d low).")
+        if cr:
+            sup += f"\nNearest EMA {cr.get('value', 0):,.2f} = RESISTANCE ({cr.get('pct', 0):+.1f}%)."
+    else:
+        hr = f", held {ns['hold_rate']}%" if ns.get("hold_rate") is not None else ""
+        sup = (f"\n\n▲ <b>SUPPORT</b> {ns.get('value', 0):,.2f} "
+               f"({html.escape(ns.get('members', ''))}, {ns.get('pct', 0):+.1f}%, {ns.get('grade', '')}{hr})")
+        if sf and sf.get("value") != ns.get("value"):
+            sup += f"\n   floor {sf.get('value', 0):,.2f} ({html.escape(sf.get('members', ''))}, {sf.get('grade', '')})"
+        if cr:
+            sup += f"\n▼ <b>RESISTANCE</b> {cr.get('value', 0):,.2f} ({html.escape(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)"
+    m = d.get("matrix") or {}
+
+    def _cell(tf: str, sp: int) -> str:
+        c = m.get(f"{tf}{sp}") or {}
+        v = c.get("v")
+        if v is None:
+            return "    n/a "
+        ar = "▲" if c.get("role") == "support" else "▼"
+        return f"{v:>8,.0f}{ar}"
+
+    rows = "TF    20EMA      50EMA      200EMA\n"
+    for tf in ("D", "W", "M"):
+        rows += f"{tf}  {_cell(tf, 20)} {_cell(tf, 50)} {_cell(tf, 200)}\n"
+    table = f"\n<pre>{rows}</pre>"
+    foot = "<i>▲=support ▼=resistance · held% = held/tested historically · not advice</i>"
+    return head + sup + table + foot
+
+
+async def _handle_scrip(bot_token: str, chat_id: int, args: str) -> None:
+    q = args.strip()
+    if not q:
+        await _send_message(
+            bot_token, chat_id,
+            "Usage: <code>/scrip &lt;name or ticker&gt;</code>\n"
+            "E.g. <code>/scrip reliance</code>, <code>/scrip nifty</code>, <code>/scrip AAPL</code>",
+        )
+        return
+    await _send_message(bot_token, chat_id, f"🔎 Looking up <b>{html.escape(q)}</b>…")
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            r = await client.get(SCRIP_LOOKUP_URL, params={"q": q, "fmt": "json"})
+        data = r.json()
+    except Exception as e:
+        await _send_message(bot_token, chat_id, f"❌ lookup failed: <code>{html.escape(str(e))}</code>")
+        return
+    await _send_message(bot_token, chat_id, _format_scrip(data))
+
+
 # ============================================================
 # Dispatcher
 # ============================================================
@@ -296,6 +370,8 @@ async def _dispatch(
         await _handle_status(bot_token, update.chat_id)
     elif cmd == "token":
         await _handle_token(bot_token, update.chat_id, args, settings)
+    elif cmd in ("scrip", "s"):
+        await _handle_scrip(bot_token, update.chat_id, args)
     else:
         await _send_message(
             bot_token,

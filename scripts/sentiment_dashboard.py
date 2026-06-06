@@ -18,6 +18,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +36,36 @@ PORT = int(os.getenv("SENTIMENT_DASH_PORT", "8002"))
 LATEST = Path("data/sentiment_latest.json")
 VENV_PY = os.path.expanduser("~/ic-venv/bin/python")
 AGENT = "scripts/run_sentiment_agent.py"
+
+# Scrip lookup: import the engine ONCE at boot (cold import of pandas/yfinance
+# is ~8s) so each search is warm (~1.5s) instead of paying that 8s on every
+# subprocess call. Cache results briefly so repeat/popular searches are instant.
+_lookup_lock = threading.Lock()
+_LOOKUP_CACHE: dict = {}
+_LOOKUP_TTL = 600  # seconds
+try:
+    from run_sentiment_agent import lookup_scrip as _lookup_scrip
+except Exception:
+    _lookup_scrip = None
+
+
+def cached_lookup(q: str) -> dict:
+    key = q.strip().lower()
+    now = time.time()
+    hit = _LOOKUP_CACHE.get(key)
+    if hit and now - hit[0] < _LOOKUP_TTL:
+        return hit[1]
+    if _lookup_scrip is None:   # fallback: cold subprocess (still works)
+        out = subprocess.run([VENV_PY, AGENT, "--lookup", q], cwd=str(REPO_ROOT),
+                             capture_output=True, text=True, timeout=90)
+        line = (out.stdout or "").strip().splitlines()[-1] if out.stdout.strip() else ""
+        data = json.loads(line) if line else {"error": "no data returned"}
+    else:
+        with _lookup_lock:       # serialize yfinance access across request threads
+            data = _lookup_scrip(q)
+    if isinstance(data, dict) and not data.get("error"):
+        _LOOKUP_CACHE[key] = (now, data)
+    return data
 
 
 def load_latest() -> dict | None:
@@ -417,18 +449,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/lookup":
                 from urllib.parse import urlparse, parse_qs
-                q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0].strip()
+                qs = parse_qs(urlparse(self.path).query)
+                q = (qs.get("q") or [""])[0].strip()
+                as_json = (qs.get("fmt") or [""])[0] == "json"   # Telegram /scrip uses JSON
                 if not q:
-                    self._send(b"<div class='lkerr'>Type a scrip name or ticker.</div>")
+                    if as_json:
+                        self._send(json.dumps({"error": "empty query"}).encode(), "application/json")
+                    else:
+                        self._send(b"<div class='lkerr'>Type a scrip name or ticker.</div>")
                     return
                 try:
-                    out = subprocess.run([VENV_PY, AGENT, "--lookup", q], cwd=str(REPO_ROOT),
-                                         capture_output=True, text=True, timeout=90)
-                    line = (out.stdout or "").strip().splitlines()[-1] if out.stdout.strip() else ""
-                    data = json.loads(line) if line else {"error": "no data returned"}
+                    data = cached_lookup(q)
                 except Exception as e:
                     data = {"error": str(e)}
-                self._send(_lookup_html(data).encode("utf-8"))
+                if as_json:
+                    self._send(json.dumps(data).encode(), "application/json")
+                else:
+                    self._send(_lookup_html(data).encode("utf-8"))
                 return
             if path in ("/", "/dashboard", "/index.html"):
                 _last_mtime["v"] = LATEST.stat().st_mtime if LATEST.exists() else 0
