@@ -301,6 +301,77 @@ def all_technicals() -> dict:
     return out
 
 
+# ============================================================
+# On-demand scrip lookup (search any symbol -> same EMA table)
+# ============================================================
+
+# Names/indices/crypto that aren't a plain '<SYMBOL>.NS' lookup.
+_SYMBOL_ALIASES = {
+    "nifty": "^NSEI", "nifty50": "^NSEI", "nifty 50": "^NSEI",
+    "banknifty": "^NSEBANK", "bank nifty": "^NSEBANK", "niftybank": "^NSEBANK",
+    "finnifty": "NIFTY_FIN_SERVICE.NS", "sensex": "^BSESN", "bankex": "BSE-BANK.BO",
+    "dow": "^DJI", "dowjones": "^DJI", "nasdaq": "^NDX", "nasdaq100": "^NDX",
+    "sp500": "^GSPC", "s&p": "^GSPC", "s&p500": "^GSPC", "spx": "^GSPC",
+    "bitcoin": "BTC-USD", "btc": "BTC-USD", "ethereum": "ETH-USD", "eth": "ETH-USD",
+    "gold": "GC=F", "silver": "SI=F", "crude": "CL=F", "usdinr": "INR=X",
+}
+
+
+def _valid_ticker(tk: str) -> bool:
+    try:
+        d = yf.download(tk, period="5d", interval="1d", progress=False, auto_adjust=False)
+        return d is not None and not d.empty
+    except Exception:
+        return False
+
+
+def resolve_symbol(query: str):
+    """Turn a user query ('reliance', 'AAPL', 'nifty', 'tcs.ns') into a yfinance
+    ticker + display name. Tries: alias table -> explicit ticker -> yfinance fuzzy
+    Search (prefers NSE then BSE for Indian names) -> .NS/.BO/plain suffix probe."""
+    q = (query or "").strip()
+    if not q:
+        return None, None
+    low = q.lower().strip()
+    if low in _SYMBOL_ALIASES:
+        return _SYMBOL_ALIASES[low], q
+    if low.replace(" ", "") in _SYMBOL_ALIASES:
+        return _SYMBOL_ALIASES[low.replace(" ", "")], q
+    if q.startswith("^") or any(s in q.upper() for s in (".NS", ".BO", "-USD", "=F", "=X")):
+        return (q if q.startswith("^") else q.upper()), q
+    try:
+        res = yf.Search(q, max_results=10)
+        quotes = [x for x in (getattr(res, "quotes", []) or []) if x.get("symbol")]
+        if quotes:
+            def rank(x):
+                s = x.get("symbol", "")
+                return (0 if s.endswith(".NS") else 1 if s.endswith(".BO") else 2)
+            best = sorted(quotes, key=rank)[0]
+            return best["symbol"], (best.get("shortname") or best.get("longname") or q)
+    except Exception:
+        pass
+    for cand in (q.upper() + ".NS", q.upper() + ".BO", q.upper()):
+        if _valid_ticker(cand):
+            return cand, q
+    return None, None
+
+
+def lookup_scrip(query: str) -> dict:
+    """Resolve a query and return the full multi-TF technicals for ANY scrip."""
+    tk, name = resolve_symbol(query)
+    if not tk:
+        return {"error": f"Couldn't find '{query}'. Try a ticker like RELIANCE.NS, AAPL or NIFTY."}
+    try:
+        t = compute_one(tk)
+    except Exception as e:
+        return {"error": f"Lookup failed for {tk}: {e}"}
+    if "error" in t:
+        return {"error": f"No price data for '{query}' ({tk})."}
+    t["ticker"] = tk
+    t["name"] = name or tk
+    return t
+
+
 TECHNICAL_TOOL = {
     "name": "get_technical_levels",
     "description": (
@@ -750,6 +821,15 @@ def _prev_overall() -> str | None:
 
 
 def main() -> None:
+    # On-demand scrip lookup: `python run_sentiment_agent.py --lookup "reliance"`
+    # prints the full multi-TF technicals as JSON (used by the dashboard search box
+    # and the Telegram /scrip command). Keeps one shared code path.
+    if "--lookup" in sys.argv:
+        i = sys.argv.index("--lookup")
+        q = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        print(json.dumps(lookup_scrip(q)))
+        return
+
     notify_flag = "--notify" in sys.argv
     prev = _prev_overall()
     print(f"Running market sentiment agent (backend={BACKEND}, "

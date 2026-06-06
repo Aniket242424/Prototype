@@ -102,6 +102,36 @@ def _ema_table(matrix: dict | None, nearest_members: str | None) -> str:
             f"<th>200 EMA</th></tr></thead><tbody>{rows}</tbody></table>")
 
 
+def _lookup_html(d: dict) -> str:
+    """Render an on-demand scrip lookup result: header + support/resistance + EMA table."""
+    if not d or d.get("error"):
+        return f"<div class='lkerr'>{_esc((d or {}).get('error', 'lookup failed'))}</div>"
+    price = d.get("price") or 0
+    rsi = d.get("rsi14")
+    ns = d.get("nearest_support") or {}
+    sf = d.get("structural_floor") or {}
+    cr = d.get("controlling_resistance") or {}
+    head = (f"<div class='lkhead'><b>{_esc(d.get('name', ''))}</b> "
+            f"<span class='muted'>[{_esc(d.get('ticker', ''))}]</span> · "
+            f"<span class='lkpx'>{price:,.2f}</span> · RSI {rsi} · {_esc(d.get('trend', ''))}"
+            f"<span class='lkbadge' style='background:#eef;color:#3949ab'>{_esc(d.get('stack_daily', ''))} stack</span></div>")
+    if d.get("no_ema_support") and ns:
+        sup = (f"<div class='lkres'>⚠ NO EMA support — below every EMA. Structural floor "
+               f"{ns.get('value', 0):,.2f} (20d low). "
+               + (f"Nearest EMA {cr.get('value', 0):,.2f} is RESISTANCE ({cr.get('pct', 0):+.1f}%)." if cr else "") + "</div>")
+    else:
+        hr = f", held {ns['hold_rate']}% of tests" if ns.get("hold_rate") is not None else ""
+        sup = (f"<div class='lksup'>▲ SUPPORT {ns.get('value', 0):,.2f} "
+               f"({_esc(ns.get('members', ''))}, {ns.get('pct', 0):+.1f}%, {ns.get('grade', '')}{hr})")
+        if sf and sf.get("value") != ns.get("value"):
+            sup += f" · floor {sf.get('value', 0):,.2f} ({_esc(sf.get('members', ''))}, {sf.get('grade', '')})"
+        sup += "</div>"
+        if cr:
+            sup += f"<div class='lkres'>▼ RESISTANCE {cr.get('value', 0):,.2f} ({_esc(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)</div>"
+    table = _ema_table(d.get("matrix"), ns.get("members"))
+    return head + sup + table
+
+
 def render(r: dict | None) -> str:
     g_summary = keystore.gemini_keys_summary()
     a_keymask = keystore.masked("anthropic_api_key", "ANTHROPIC_API_KEY") or "(not set)"
@@ -215,10 +245,29 @@ def render(r: dict | None) -> str:
     <span class="muted" id="metaline">{meta_line}</span>
   </div>
 </header>
-<main>{body}{keypanel}
+<main>
+  <div class="panel">
+    <div class="panel-title">🔎 Look up any scrip <span class="muted">· multi-timeframe EMA support + historical hold-rate for ANY stock / index / crypto</span></div>
+    <div class="lookrow">
+      <input id="scripq" placeholder="e.g. Reliance, TCS, Infosys, NIFTY, Bank Nifty, AAPL, BTC, Gold…" onkeydown="if(event.key==='Enter')lookupScrip()"/>
+      <button onclick="lookupScrip()">Search</button>
+    </div>
+    <div id="lookout" class="lookout"></div>
+  </div>
+{body}{keypanel}
   <div class="foot">Gemini (free) → Claude (fallback) → neutral. Not financial advice. Auto-refreshes every 20s.</div>
 </main>
 <script>
+async function lookupScrip(){{
+  const q=document.getElementById('scripq').value.trim();
+  const out=document.getElementById('lookout');
+  if(!q){{ out.innerHTML=''; return; }}
+  out.innerHTML='<div class="muted">Looking up '+q+'… (first fetch can take a few seconds)</div>';
+  try{{
+    const r=await fetch('/api/lookup?q='+encodeURIComponent(q),{{cache:'no-store'}});
+    out.innerHTML=await r.text();
+  }}catch(e){{ out.innerHTML='<div class="lkerr">lookup failed: '+e+'</div>'; }}
+}}
 async function saveKey(name, inputId){{
   const v = document.getElementById(inputId).value.trim(); if(!v) return;
   const el=document.getElementById('ksave'); el.textContent='saving…';
@@ -310,6 +359,15 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .emres{background:#fdecea}.emres .empct{color:#c62828}.emres .emhr{color:#c62828}
 .emna{background:#f5f5f5;color:#bbb;font-size:10px;vertical-align:middle}
 .emnear{border:2px solid #00a86b;box-shadow:0 0 0 1px #00a86b inset}
+.lookrow{display:flex;gap:8px;margin-top:4px}
+.lookrow input{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px}
+.lookrow button{padding:10px 20px;border:0;border-radius:6px;background:var(--green,#00a86b);color:#fff;font-weight:700;cursor:pointer}
+.lookout{margin-top:12px}
+.lkhead{font-size:16px;color:var(--strong);margin-bottom:4px}
+.lkpx{font-family:monospace;font-weight:700}
+.lksup{font-size:12px;margin:6px 0;color:#00695c}.lkres{font-size:12px;margin:2px 0;color:#b71c1c}
+.lkerr{color:#b71c1c;font-size:13px;padding:8px;background:#fdecea;border-radius:6px}
+.lkbadge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px}
 .krow{display:grid;grid-template-columns:200px 200px 1fr 70px;gap:8px;align-items:center;margin-bottom:8px}
 .kname{font-weight:600;color:var(--strong)}.kmask{font-family:monospace;color:var(--muted)}.ksrc{font-size:10px}
 .krow input{padding:6px 8px;border:1px solid var(--border);border-radius:5px}
@@ -356,6 +414,21 @@ class Handler(BaseHTTPRequestHandler):
                 mtime = LATEST.stat().st_mtime if LATEST.exists() else 0
                 r["_fresh"] = mtime > _last_mtime["v"]
                 self._send(json.dumps(r).encode(), "application/json")
+                return
+            if path == "/api/lookup":
+                from urllib.parse import urlparse, parse_qs
+                q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0].strip()
+                if not q:
+                    self._send(b"<div class='lkerr'>Type a scrip name or ticker.</div>")
+                    return
+                try:
+                    out = subprocess.run([VENV_PY, AGENT, "--lookup", q], cwd=str(REPO_ROOT),
+                                         capture_output=True, text=True, timeout=90)
+                    line = (out.stdout or "").strip().splitlines()[-1] if out.stdout.strip() else ""
+                    data = json.loads(line) if line else {"error": "no data returned"}
+                except Exception as e:
+                    data = {"error": str(e)}
+                self._send(_lookup_html(data).encode("utf-8"))
                 return
             if path in ("/", "/dashboard", "/index.html"):
                 _last_mtime["v"] = LATEST.stat().st_mtime if LATEST.exists() else 0
