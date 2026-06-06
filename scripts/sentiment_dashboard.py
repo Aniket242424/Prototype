@@ -283,6 +283,7 @@ def render(r: dict | None) -> str:
     <div class="lookrow">
       <input id="scripq" placeholder="e.g. Reliance, TCS, Infosys, NIFTY, Bank Nifty, AAPL, BTC, Gold…" onkeydown="if(event.key==='Enter')lookupScrip()"/>
       <button onclick="lookupScrip()">Search</button>
+      <button onclick="clearLookup()" class="rstbtn">Clear</button>
     </div>
     <div id="lookout" class="lookout"></div>
   </div>
@@ -299,6 +300,10 @@ async function lookupScrip(){{
     const r=await fetch('/api/lookup?q='+encodeURIComponent(q),{{cache:'no-store'}});
     out.innerHTML=await r.text();
   }}catch(e){{ out.innerHTML='<div class="lkerr">lookup failed: '+e+'</div>'; }}
+}}
+function clearLookup(){{
+  document.getElementById('scripq').value='';
+  document.getElementById('lookout').innerHTML='';
 }}
 async function saveKey(name, inputId){{
   const v = document.getElementById(inputId).value.trim(); if(!v) return;
@@ -340,7 +345,14 @@ async function runNow(){{
     if(n>40){{ clearInterval(t); b.disabled=false; b.textContent='⟳ Run now'; }}
   }}, 3000);
 }}
-setInterval(()=>location.reload(), 20000);
+// Auto-refresh the sentiment read — but DON'T wipe a scrip search result the
+// user is reading (or a query they're typing). Resume once the search is cleared.
+setInterval(()=>{{
+  const out=document.getElementById('lookout');
+  const q=document.getElementById('scripq');
+  const busy=(out && out.innerHTML.trim()!=='') || (q && (document.activeElement===q || q.value.trim()!==''));
+  if(!busy) location.reload();
+}}, 20000);
 </script></body></html>"""
 
 
