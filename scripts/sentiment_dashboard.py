@@ -66,11 +66,19 @@ def _gauge_pct(overall: str, conf: float) -> float:
     return 50.0
 
 
+ANTHROPIC_BUDGET_INR = float(os.getenv("ANTHROPIC_BUDGET_INR", "100"))
+
+
 def render(r: dict | None) -> str:
-    g_keymask = keystore.masked("gemini_api_key", "GEMINI_API_KEY") or "(not set)"
-    g_src = keystore.source("gemini_api_key", "GEMINI_API_KEY")
+    g_summary = keystore.gemini_keys_summary()
     a_keymask = keystore.masked("anthropic_api_key", "ANTHROPIC_API_KEY") or "(not set)"
     a_src = keystore.source("anthropic_api_key", "ANTHROPIC_API_KEY")
+    usage = keystore.get_usage()
+    gu = usage.get("gemini", {}); au = usage.get("anthropic", {})
+    g_used = f"{gu.get('calls', 0)} runs · {gu.get('tokens_in', 0) + gu.get('tokens_out', 0):,} tok · ₹0 (free)"
+    a_cost = au.get("cost_inr", 0.0)
+    a_used = f"{au.get('calls', 0)} runs · ₹{a_cost:.0f} of ₹{ANTHROPIC_BUDGET_INR:.0f} budget"
+    a_over = a_cost >= ANTHROPIC_BUDGET_INR
 
     if not r:
         body = "<div class='panel'><div class='empty'>No sentiment read yet. Click <b>Run now</b>.</div></div>"
@@ -135,18 +143,21 @@ def render(r: dict | None) -> str:
 
     keypanel = f"""
     <div class="panel">
-      <div class="panel-title">API keys <span class="muted">· set from here, encrypted at rest</span></div>
-      <div class="krow">
-        <div class="kname">Gemini <span class="muted">(free, primary)</span></div>
-        <div class="kmask">{g_keymask} <span class="ksrc">[{g_src}]</span></div>
-        <input id="gkey" type="password" placeholder="paste new Gemini key (AIza…)" />
-        <button onclick="saveKey('gemini_api_key','gkey')">Save</button>
+      <div class="panel-title">API keys &amp; usage <span class="muted">· set from here, encrypted at rest · keys/usage survive any model change</span></div>
+      <div class="kblock">
+        <div class="kname">Gemini <span class="muted">(free, primary — paste 1-3 keys, one per line, from different Gmails for rotation)</span></div>
+        <div class="kmask">{g_summary}</div>
+        <div class="kusage">usage: {g_used}</div>
+        <textarea id="gkeys" rows="3" placeholder="AIza...key1&#10;AIza...key2&#10;AIza...key3"></textarea>
+        <button onclick="saveGeminiKeys()">Save Gemini keys</button>
       </div>
-      <div class="krow">
-        <div class="kname">Claude / Anthropic <span class="muted">(fallback)</span></div>
+      <div class="kblock">
+        <div class="kname">Claude / Anthropic <span class="muted">(paid fallback — only used if all Gemini keys fail)</span></div>
         <div class="kmask">{a_keymask} <span class="ksrc">[{a_src}]</span></div>
+        <div class="kusage {'over' if a_over else ''}">usage: {a_used}{' · STOPPED (budget hit)' if a_over else ''}</div>
         <input id="akey" type="password" placeholder="paste new Claude key (sk-ant-…)" />
         <button onclick="saveKey('anthropic_api_key','akey')">Save</button>
+        <button onclick="resetUsage()" class="rstbtn">Reset usage</button>
       </div>
       <div id="ksave" class="ksave"></div>
     </div>"""
@@ -172,6 +183,21 @@ async function saveKey(name, inputId){{
       body:JSON.stringify({{name,value:v}})}}); const d=await r.json();
     el.textContent = d.ok ? '✓ saved — reloading…' : ('error: '+(d.error||''));
     if(d.ok) setTimeout(()=>location.reload(),900);
+  }}catch(e){{ el.textContent='error: '+e; }}
+}}
+async function saveGeminiKeys(){{
+  const v = document.getElementById('gkeys').value.trim(); if(!v) return;
+  const el=document.getElementById('ksave'); el.textContent='saving…';
+  try{{ const r=await fetch('/api/setkey',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{name:'gemini_keys',value:v}})}}); const d=await r.json();
+    el.textContent = d.ok ? ('✓ saved '+(d.count||'')+' Gemini key(s) — reloading…') : ('error: '+(d.error||''));
+    if(d.ok) setTimeout(()=>location.reload(),900);
+  }}catch(e){{ el.textContent='error: '+e; }}
+}}
+async function resetUsage(){{
+  const el=document.getElementById('ksave'); el.textContent='resetting…';
+  try{{ await fetch('/api/resetusage',{{method:'POST'}}); el.textContent='✓ usage reset — reloading…';
+    setTimeout(()=>location.reload(),700);
   }}catch(e){{ el.textContent='error: '+e; }}
 }}
 async function runNow(){{
@@ -228,6 +254,12 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .krow input{padding:6px 8px;border:1px solid var(--border);border-radius:5px}
 .krow button{background:var(--strong);color:#fff;border:none;border-radius:5px;padding:6px;cursor:pointer}
 .ksave{font-size:12px;color:var(--green);min-height:16px}
+.kblock{padding:10px 0;border-bottom:1px solid var(--border)}
+.kblock .kname{margin-bottom:4px}.kblock .kmask{font-family:monospace;color:var(--muted);margin-bottom:2px}
+.kusage{font-size:11px;color:var(--muted);margin-bottom:6px}.kusage.over{color:var(--red);font-weight:600}
+.kblock textarea{width:100%;max-width:520px;font-family:monospace;font-size:12px;padding:6px 8px;border:1px solid var(--border);border-radius:5px;display:block;margin-bottom:6px}
+.kblock button{background:var(--strong);color:#fff;border:none;border-radius:5px;padding:6px 12px;cursor:pointer;margin-right:6px}
+.rstbtn{background:#fff !important;color:var(--muted) !important;border:1px solid var(--border) !important}
 .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:8px}
 @media(max-width:760px){.agrid{grid-template-columns:1fr}.krow{grid-template-columns:1fr}}
 """
@@ -274,11 +306,19 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n) or b"{}") if n else {}
             if self.path == "/api/setkey":
                 name = body.get("name"); val = body.get("value")
-                if name in ("gemini_api_key", "anthropic_api_key") and val:
+                if name == "gemini_keys" and val:
+                    keys = [k.strip() for k in str(val).replace(",", "\n").splitlines() if k.strip()]
+                    keystore.set_gemini_keys(keys)
+                    self._send(json.dumps({"ok": True, "count": len(keys)}).encode(), "application/json")
+                elif name in ("gemini_api_key", "anthropic_api_key") and val:
                     keystore.set_key(name, val.strip())
                     self._send(json.dumps({"ok": True}).encode(), "application/json")
                 else:
                     self._send(json.dumps({"ok": False, "error": "bad params"}).encode(), "application/json", 400)
+                return
+            if self.path == "/api/resetusage":
+                keystore.reset_usage()
+                self._send(json.dumps({"ok": True}).encode(), "application/json")
                 return
             if self.path == "/api/run":
                 subprocess.Popen([VENV_PY, AGENT], cwd=str(REPO_ROOT),

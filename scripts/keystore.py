@@ -13,6 +13,49 @@ import os
 from pathlib import Path
 
 KEYS_FILE = Path("data/agent_keys.json")
+USAGE_FILE = Path("data/agent_usage.json")
+
+
+# ---------- token usage tracking (per backend) ----------
+def _load_usage() -> dict:
+    if USAGE_FILE.exists():
+        try:
+            return json.loads(USAGE_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_usage(d: dict) -> None:
+    USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = USAGE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d))
+    os.replace(tmp, USAGE_FILE)
+
+
+def record_usage(backend: str, t_in: int, t_out: int, cost_inr: float) -> None:
+    d = _load_usage()
+    b = d.setdefault(backend, {"tokens_in": 0, "tokens_out": 0, "cost_inr": 0.0, "calls": 0})
+    b["tokens_in"] += int(t_in or 0)
+    b["tokens_out"] += int(t_out or 0)
+    b["cost_inr"] = round(b["cost_inr"] + float(cost_inr or 0), 2)
+    b["calls"] += 1
+    _save_usage(d)
+
+
+def get_usage() -> dict:
+    return _load_usage()
+
+
+def reset_usage(backend: str | None = None) -> None:
+    if backend:
+        d = _load_usage(); d.pop(backend, None); _save_usage(d)
+    else:
+        _save_usage({})
+
+
+def cost_so_far(backend: str) -> float:
+    return float(_load_usage().get(backend, {}).get("cost_inr", 0.0))
 
 
 def _fernet():
@@ -74,6 +117,58 @@ def masked(name: str, env_fallback: str | None = None) -> str | None:
     if not v:
         return None
     return (v[:7] + "…" + v[-4:]) if len(v) > 12 else "set"
+
+
+def set_gemini_keys(keys: list[str]) -> None:
+    """Store a LIST of Gemini keys (one per Gmail account) for rotation."""
+    KEYS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = _load()
+    cleaned = [k.strip() for k in keys if k and k.strip()]
+    f = _fernet()
+    if f:
+        data["gemini_api_keys"] = {"enc": True, "val": f.encrypt(json.dumps(cleaned).encode()).decode()}
+    else:
+        data["gemini_api_keys"] = {"enc": False, "val": cleaned}
+    tmp = KEYS_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(data)); os.replace(tmp, KEYS_FILE)
+    try:
+        os.chmod(KEYS_FILE, 0o600)
+    except Exception:
+        pass
+
+
+def get_gemini_keys() -> list[str]:
+    """All Gemini keys: UI list + UI single + env (GEMINI_API_KEY[_2/_3/_4]), deduped."""
+    keys: list[str] = []
+    e = _load().get("gemini_api_keys")
+    if e:
+        if e.get("enc"):
+            fr = _fernet()
+            if fr:
+                try:
+                    keys += json.loads(fr.decrypt(e["val"].encode()).decode())
+                except Exception:
+                    pass
+        elif isinstance(e.get("val"), list):
+            keys += e["val"]
+    single = get_key("gemini_api_key")  # UI single or env GEMINI_API_KEY
+    if single:
+        keys.append(single)
+    for env in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"):
+        v = os.getenv(env)
+        if v:
+            keys.append(v)
+    seen, out = set(), []
+    for k in keys:
+        if k and k not in seen:
+            seen.add(k); out.append(k)
+    return out
+
+
+def gemini_keys_summary() -> str:
+    ks = get_gemini_keys()
+    if not ks:
+        return "(none)"
+    return f"{len(ks)} key(s): " + ", ".join((k[:6] + "…" + k[-4:]) for k in ks[:3])
 
 
 def source(name: str, env_fallback: str | None = None) -> str:

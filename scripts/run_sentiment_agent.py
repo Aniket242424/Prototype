@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -43,16 +44,26 @@ BRIEFING_HOURS = {int(h) for h in os.getenv("SENTIMENT_BRIEFING_HOURS", "3,13").
 BACKEND = os.getenv("SENTIMENT_BACKEND", "gemini").lower()   # "gemini" (free) | "anthropic"
 MODEL = os.getenv("SENTIMENT_MODEL", "claude-sonnet-4-6")    # anthropic model
 GEMINI_MODEL = os.getenv("SENTIMENT_GEMINI_MODEL", "gemini-2.5-flash")
+# Free Gemini models tried in order — if one is overloaded (503), try the next
+# (both free, both have Google Search) before ever touching paid Claude.
+GEMINI_MODELS = [m.strip() for m in
+                 os.getenv("SENTIMENT_GEMINI_MODELS", "gemini-2.5-flash,gemini-2.0-flash").split(",")
+                 if m.strip()]
+# Stop using the paid Claude fallback once it has cost this much (₹). Gemini
+# (free) keeps running; if Gemini is also down we skip the read (memory intact).
+ANTHROPIC_BUDGET_INR = float(os.getenv("ANTHROPIC_BUDGET_INR", "100"))
+GEMINI_RETRIES = int(os.getenv("SENTIMENT_GEMINI_RETRIES", "3"))
 FX = float(os.getenv("DELTA_IC_FX_INR_USD", "84"))
 LATEST = Path("data/sentiment_latest.json")
 HISTORY = Path("data/sentiment_history.jsonl")
 
 # Assets the agent watches (display -> yfinance ticker)
 ASSETS = {
-    "Dow Jones": "^DJI",     # spot indices (recognizable values, not futures)
-    "Nasdaq": "^IXIC",
+    "Dow Jones": "^DJI",       # spot indices (recognizable values, not futures)
+    "Nasdaq 100": "^NDX",      # US Tech 100 (~29,000), matches heavyweight weights
     "S&P 500": "^GSPC",
     "Nifty 50": "^NSEI",
+    "Bank Nifty": "^NSEBANK",
     "Bitcoin": "BTC-USD",
     "Gold": "GC=F",
 }
@@ -166,6 +177,7 @@ RULES for every asset:
 
 INDEX HEAVYWEIGHTS you must reason with (approximate weights; web-search if you need current figures):
 - NIFTY 50: Reliance ~9%, HDFC Bank ~11%, ICICI Bank ~8%, Infosys ~6%, TCS ~4%, Bharti Airtel, L&T, ITC. Financials ~35%. A Reliance or HDFC Bank rally alone can lift Nifty even on weak breadth.
+- BANK NIFTY: HDFC Bank ~28%, ICICI Bank ~24%, SBI ~9%, Axis ~9%, Kotak ~8%. Just HDFC Bank + ICICI Bank = ~52%, so those two stocks essentially DECIDE Bank Nifty's direction.
 - NASDAQ-100: Apple ~9%, Microsoft ~8%, Nvidia ~8%, Amazon ~5%, Broadcom ~5%, Meta ~5%, Tesla, Alphabet. Top-7 ~45% — Nvidia/Apple/Microsoft swings dominate.
 - S&P 500: the "Magnificent Seven" (Apple, Microsoft, Nvidia, Amazon, Meta, Alphabet, Tesla) ~30% — same mega-caps drive it.
 - DOW JONES: price-weighted — high-priced names (Goldman Sachs, UnitedHealth, Microsoft, Home Depot, Caterpillar) carry the most points.
@@ -312,11 +324,14 @@ class _Sentiment(BaseModel):
     catalysts_ahead: list[str]
 
 
+# Order matters: Bank Nifty must come BEFORE Nifty 50 (so "bank nifty" isn't
+# mis-matched to Nifty 50 by the shared word "nifty").
 _ALIASES = {
     "Dow Jones": ["dow", "djia"],
-    "Nasdaq": ["nasdaq", "ndx", "ixic", "comp"],
+    "Nasdaq 100": ["nasdaq", "ndx", "100"],
     "S&P 500": ["s&p", "spx", "gspc", "500"],
-    "Nifty 50": ["nifty"],
+    "Bank Nifty": ["bank nifty", "banknifty", "nifty bank", "nsebank", "bank"],
+    "Nifty 50": ["nifty 50", "nifty50", "nifty"],
     "Bitcoin": ["bitcoin", "btc"],
     "Gold": ["gold", "xau"],
 }
@@ -341,11 +356,46 @@ def _enrich_with_technicals(parsed: dict, tech: dict) -> dict:
     return parsed
 
 
-def run_agent_gemini() -> dict:
+def _gemini_generate(client, **kw):
+    """generate_content with retry/backoff on transient overload (503/429) —
+    keeps runs on the FREE backend instead of falling over to paid Claude."""
+    last = None
+    for attempt in range(GEMINI_RETRIES):
+        try:
+            return client.models.generate_content(**kw)
+        except Exception as e:
+            last = e
+            s = str(e).lower()
+            if any(t in s for t in ("503", "unavailable", "overloaded", "429", "resource_exhausted")):
+                time.sleep(2 * (attempt + 1)); continue
+            raise
+    raise last
+
+
+def run_agent_gemini_chain() -> dict:
+    """Try every (Gemini key × model) combo in turn — rotate across the user's
+    Gmail keys and free models. Only raise if ALL fail (then dispatcher → Claude)."""
+    keys = keystore.get_gemini_keys()
+    if not keys:
+        raise RuntimeError("No Gemini key set (UI or GEMINI_API_KEY)")
+    models = GEMINI_MODELS or [GEMINI_MODEL]
+    last = None
+    for ki, key in enumerate(keys):
+        for m in models:
+            try:
+                return run_agent_gemini(m, key)
+            except Exception as e:
+                last = e
+                print(f"  [gemini key#{ki + 1} {m} failed: {str(e)[:110]}]")
+    raise last if last else RuntimeError("no gemini key/model available")
+
+
+def run_agent_gemini(model: str | None = None, api_key: str | None = None) -> dict:
     from google import genai
     from google.genai import types
 
-    key = keystore.get_key("gemini_api_key", "GEMINI_API_KEY")
+    model = model or (GEMINI_MODELS[0] if GEMINI_MODELS else GEMINI_MODEL)
+    key = api_key or keystore.get_key("gemini_api_key", "GEMINI_API_KEY")
     if not key:
         raise RuntimeError("No Gemini key set (UI or GEMINI_API_KEY)")
     client = genai.Client(api_key=key)
@@ -359,8 +409,8 @@ def run_agent_gemini() -> dict:
         "data, war/geopolitics, big-tech/chips, policy), then write your complete market read per "
         "your instructions. Cover every asset above with its support level and what happens if it breaks."
     )
-    r1 = client.models.generate_content(
-        model=GEMINI_MODEL, contents=research,
+    r1 = _gemini_generate(
+        client, model=model, contents=research,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM,
             tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -383,12 +433,12 @@ def run_agent_gemini() -> dict:
         raise RuntimeError("Gemini answer was NOT grounded (no web search) — failing over to Claude")
 
     # Step 2 — structure the analysis into strict JSON (no tools).
-    r2 = client.models.generate_content(
-        model=GEMINI_MODEL,
+    r2 = _gemini_generate(
+        client, model=model,
         contents=("Convert this market analysis into the required JSON. Keep it faithful. "
-                  "Include ALL SIX assets (Dow Jones, Nasdaq, S&P 500, Nifty 50, Bitcoin, Gold), "
-                  "each with support + if_breaks. For every asset, 'bias' must be EXACTLY one of: "
-                  "bullish, bearish, neutral (never 'uptrend'/'downtrend').\n\n" + analysis),
+                  "Include ALL SEVEN assets (Dow Jones, Nasdaq 100, S&P 500, Nifty 50, Bank Nifty, "
+                  "Bitcoin, Gold), each with support + if_breaks. For every asset, 'bias' must be "
+                  "EXACTLY one of: bullish, bearish, neutral (never 'uptrend'/'downtrend').\n\n" + analysis),
         config=types.GenerateContentConfig(
             response_mime_type="application/json", response_schema=_Sentiment,
             temperature=0.0, max_output_tokens=8000,
@@ -404,7 +454,7 @@ def run_agent_gemini() -> dict:
     i1, o1 = _toks(r1); i2, o2 = _toks(r2)
     parsed["_meta"] = {
         "as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "model": GEMINI_MODEL, "backend": "gemini",
+        "model": model, "backend": "gemini",
         "tokens_in": i1 + i2, "tokens_out": o1 + o2,
         "web_searches": "google-grounded",
         "cost_usd": 0.0, "cost_inr": 0.0,   # free tier
@@ -419,11 +469,17 @@ def run_agent() -> dict:
     bad key, parse error), automatically fall back to the other one. If both
     fail, return a safe neutral read — the system must never crash.
     """
-    order = ([("gemini", run_agent_gemini), ("anthropic", run_agent_anthropic)]
+    order = ([("gemini", run_agent_gemini_chain), ("anthropic", run_agent_anthropic)]
              if BACKEND != "anthropic" else
-             [("anthropic", run_agent_anthropic), ("gemini", run_agent_gemini)])
+             [("anthropic", run_agent_anthropic), ("gemini", run_agent_gemini_chain)])
     errors = []
     for i, (name, fn) in enumerate(order):
+        # Budget gate: stop using paid Claude once it has cost ANTHROPIC_BUDGET_INR.
+        if name == "anthropic" and keystore.cost_so_far("anthropic") >= ANTHROPIC_BUDGET_INR:
+            msg = (f"anthropic: budget hit (₹{keystore.cost_so_far('anthropic'):.0f} "
+                   f">= ₹{ANTHROPIC_BUDGET_INR:.0f}) — skipped to stay free")
+            errors.append(msg); print(f"  [{msg}]")
+            continue
         try:
             read = fn()
             if i > 0:  # we fell back
@@ -503,6 +559,12 @@ def main() -> None:
     read = run_agent()
     store(read)
     report(read)
+
+    # Record token usage per backend (for the UI + Anthropic budget cap).
+    m = read.get("_meta", {})
+    if m.get("backend") in ("gemini", "anthropic"):
+        keystore.record_usage(m["backend"], m.get("tokens_in", 0),
+                              m.get("tokens_out", 0), m.get("cost_inr", 0))
 
     new_overall = (read.get("overall") or "neutral").lower()
     flipped = prev is not None and prev != new_overall
