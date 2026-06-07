@@ -156,8 +156,8 @@ def _ema_table(matrix: dict | None, nearest_members: str | None) -> str:
             tds += (f"<td class='{cls}'><span class='emv'>{v:,.0f}</span>"
                     f"<span class='empct'>{arrow} {pct:+.1f}%</span>{hr}</td>")
         rows += f"<tr><th>{label}</th>{tds}</tr>"
-    return (f"<table class='emat'><thead><tr><th></th><th>20 EMA</th><th>50 EMA</th>"
-            f"<th>200 EMA</th></tr></thead><tbody>{rows}</tbody></table>")
+    return (f"<div class='tscroll'><table class='emat'><thead><tr><th></th><th>20 EMA</th><th>50 EMA</th>"
+            f"<th>200 EMA</th></tr></thead><tbody>{rows}</tbody></table></div>")
 
 
 def _bounce_line(b: dict | None, show_none: bool = False) -> str:
@@ -603,7 +603,28 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .ktbl td{padding:5px 8px;border-bottom:1px solid #f3f3f3;font-family:monospace}
 .ktbl tr.kact td{background:var(--green-soft,#e8f5e9);color:var(--green);font-weight:700}
 .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:8px}
-@media(max-width:760px){.agrid{grid-template-columns:1fr}.krow{grid-template-columns:1fr}}
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+/* ---- mobile / narrow screens ---- */
+@media(max-width:760px){
+  main{padding:12px 12px}
+  header{padding:11px 13px}
+  .agrid,.evgrid{grid-template-columns:1fr}
+  .krow{grid-template-columns:1fr;gap:5px}
+  .panel{padding:13px}
+  .bigbias{font-size:26px}.bigbias .conf{font-size:13px}
+  .lookrow{flex-wrap:wrap}.lookrow input{flex:1 1 100%}
+  .kblock textarea,.ktbl{max-width:100%}
+  .trrow{gap:12px}.trpill{min-width:78px}.trpill .trv{font-size:22px}
+  .emat{font-size:11px;border-spacing:2px}.emat td{padding:4px 5px}.emat .emv{font-size:11px}
+  .blist{padding-left:15px}.abounce{font-size:11px}
+}
+@media(max-width:430px){
+  body{font-size:12px}
+  .bigbias{font-size:22px}
+  .emat{font-size:10px}.emat td{padding:3px 4px}.emat th{font-size:8px}
+  .acard,.evcard{padding:10px}
+  .runbtn,.hmeta{font-size:11px}
+}
 """
 
 
