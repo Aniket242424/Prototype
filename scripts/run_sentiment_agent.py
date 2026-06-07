@@ -145,11 +145,14 @@ def _hold_stats(close: pd.Series, ema: pd.Series, hivol: bool, fwd: int = 5) -> 
 
 def _scan_bounces(frame: pd.DataFrame, tf_label: str, hivol: bool,
                   min_rally: float, lookback: int, win: int, k: int = 3) -> list:
-    """The last `k` SIGNIFICANT bounces off a 20/50/200 EMA on ONE timeframe frame,
-    most-recent first. Each: price pulled back to the EMA from above, closed back
-    above it, then RALLIED >= min_rally% off it within `win` bars. More bounces off
-    the same EMA = it's more reliably respected (higher-probability launchpad).
-    A `win`-bar cooldown keeps these as DISTINCT pullbacks, not the same one twice."""
+    """The last `k` CONFIRMED bounces off a 20/50/200 EMA on ONE timeframe frame,
+    most-recent first. A bounce only counts if: price was clearly ABOVE the EMA
+    (with a buffer), pulled back to touch it, closed back above, the EMA was RISING
+    (support, not falling resistance), and then price RALLIED >= min_rally% off it
+    BEFORE any close broke decisively back below — so a wick-then-fail / dead-cat is
+    NEVER logged. Each event is stamped 'currently' support/broken vs the live EMA so
+    a since-broken level is never presented as a live launchpad. (Reviewed for false
+    positives — bounce data must be real, it's fed to the LLM verbatim.)"""
     c = frame["Close"].dropna()
     n = len(c)
     if n < 25:
@@ -159,9 +162,11 @@ def _scan_bounces(frame: pd.DataFrame, tf_label: str, hivol: bool,
     cv = c.values.astype(float)
     tol = 0.02 if hivol else 0.01          # low must reach within tol of the EMA
     deep = 0.03 if hivol else 0.015        # but not gap far below (that's a break, not a touch)
+    brk = 0.02 if hivol else 0.01          # close below ema*(1-brk) = broke (matches _hold_stats)
     unit = {"Weekly": "w", "Monthly": "mo"}.get(tf_label, "d")
     emas = {span: c.ewm(span=span, adjust=True).mean().values
             for span in (20, 50, 200) if n >= 3 * span}
+    price_now = cv[-1]
     events, last_i, i, stop = [], n + 999, n - 2, max(1, n - lookback)
     while i > stop and len(events) < k:
         if last_i - i <= win:              # cooldown — same pullback already counted
@@ -171,24 +176,37 @@ def _scan_bounces(frame: pd.DataFrame, tf_label: str, hivol: bool,
             ev = emas.get(span)
             if ev is None or np.isnan(ev[i]) or np.isnan(ev[i - 1]):
                 continue
-            was_above = cv[i - 1] > ev[i - 1]
+            was_above = cv[i - 1] > ev[i - 1] * (1 + tol)          # clearly above (buffer) = a real pullback
             touched = ev[i] * (1 - deep) <= low[i] <= ev[i] * (1 + tol)
-            held = cv[i] > ev[i]
-            if not (was_above and touched and held):
+            held = cv[i] > ev[i]                                   # closed back above the EMA
+            lb = min(8, i)
+            rising = lb < 3 or ev[i] >= ev[i - lb]                 # support = rising/flat EMA, not falling resistance
+            if not (was_above and touched and held and rising):
                 continue
-            peak = float(np.max(high[i + 1:min(i + 1 + win, n)])) if i + 1 < n else cv[i]
-            rally = (peak / ev[i] - 1) * 100
-            if rally >= min_rally and (pick is None or abs(low[i] - ev[i]) < pick["_d"]):
-                pick = {"_d": abs(low[i] - ev[i]), "label": label, "from": ev[i],
-                        "to": peak, "rally": rally}
+            # Forward: count the rally (peak high) ONLY across bars before any close
+            # breaks decisively back below the EMA. The break is checked BEFORE the
+            # high is counted, so a bar that wicks up then closes below is rejected.
+            peak, reached = cv[i], False
+            for j in range(i + 1, min(i + 1 + win, n)):
+                if cv[j] < ev[i] * (1 - brk):                      # closed decisively below -> broke
+                    break
+                if high[j] > peak:
+                    peak = high[j]
+                if (peak / ev[i] - 1) * 100 >= min_rally:
+                    reached = True                                 # achieved a real, held rally
+            if reached and (pick is None or abs(low[i] - ev[i]) < pick["_d"]):
+                pick = {"_d": abs(low[i] - ev[i]), "label": label, "span": span,
+                        "from": ev[i], "to": peak, "rally": (peak / ev[i] - 1) * 100}
         if pick:
             ago = int(n - 1 - i)
+            live_ema = emas[pick["span"]][n - 1]
             events.append({"tf": tf_label, "ema": pick["label"],
                            "date": c.index[i].date().isoformat(),
                            "ago": (f"{ago}{unit} ago" if ago > 0 else "latest bar"),
                            "from_px": round(float(pick["from"]), 2),
                            "to_px": round(float(pick["to"]), 2),
-                           "rally_pct": round(float(pick["rally"]), 1)})
+                           "rally_pct": round(float(pick["rally"]), 1),
+                           "currently": ("support" if price_now > live_ema else "broken")})
             last_i = i
         i -= 1
     return events

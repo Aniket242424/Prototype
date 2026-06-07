@@ -303,6 +303,7 @@ def _format_scrip(d: dict) -> str:
             rows = "; ".join(
                 f"{html.escape(str(x.get('ema', '')))} {html.escape(str(x.get('date', '')))} "
                 f"{x.get('from_px'):,.2f}→{x.get('to_px'):,.2f} (+{x.get('rally_pct')}%)"
+                + (" ⚠BROKEN" if x.get('currently') == 'broken' else "")
                 for x in lst)
             sup += f"\n  <i>{tf_name}</i>: {rows}"
     else:

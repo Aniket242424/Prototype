@@ -171,11 +171,15 @@ def _bounce_line(b: dict | None, show_none: bool = False) -> str:
                 "(price hasn't pulled back to &amp; rallied &ge;2% off an EMA)</div>" if show_none else "")
 
     def _items(lst):
-        return "".join(
-            f"<li><b>{_esc(x.get('ema', ''))}</b> {_esc(x.get('date', ''))} "
-            f"<span class='bago'>({_esc(x.get('ago', ''))})</span>: "
-            f"{x.get('from_px'):,.2f} → {x.get('to_px'):,.2f} <b>+{x.get('rally_pct')}%</b></li>"
-            for x in lst)
+        rows = ""
+        for x in lst:
+            brk = (" <span class='bbrk'>· level since BROKEN</span>"
+                   if x.get("currently") == "broken" else "")
+            rows += (f"<li><b>{_esc(x.get('ema', ''))}</b> {_esc(x.get('date', ''))} "
+                     f"<span class='bago'>({_esc(x.get('ago', ''))})</span>: "
+                     f"{x.get('from_px'):,.2f} → {x.get('to_px'):,.2f} "
+                     f"<b>+{x.get('rally_pct')}%</b>{brk}</li>")
+        return rows
     out = "<div class='abounce'><span class='lbl'>LAST BOUNCES</span>"
     if daily:
         out += f"<div class='bgrp'><span class='btf'>Daily</span><ul class='blist'>{_items(daily)}</ul></div>"
@@ -544,6 +548,7 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .abounce .lbl{display:inline-block;margin-bottom:3px}
 .bgrp{margin-top:2px}.btf{font-size:10px;font-weight:700;text-transform:uppercase;color:#3949ab}
 .blist{margin:1px 0 4px;padding-left:16px}.blist li{margin:1px 0}.bago{color:var(--muted)}
+.bbrk{color:#c62828;font-weight:700;font-size:10px}
 .lbl{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:3px;background:#fff;border:1px solid var(--border);margin-right:4px}
 .emat{width:100%;border-collapse:separate;border-spacing:3px;margin-top:10px;font-family:monospace}
 .emat th{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;padding:2px 4px;text-align:center}
