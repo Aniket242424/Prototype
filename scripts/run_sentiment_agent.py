@@ -225,6 +225,34 @@ def _latest_bounce(df: pd.DataFrame, hivol: bool) -> dict | None:
     return {"daily": daily, "weekly": weekly}
 
 
+_PRICE_CACHE: dict = {}   # ticker -> (epoch, df) — avoids re-downloading 'max' history every call
+_PRICE_TTL = 1800         # 30 min: EMA-support levels don't need fresher; cuts Yahoo rate-limiting
+
+
+def _download_daily_max(ticker: str):
+    """Full daily history for a ticker, cached 30 min + retried on Yahoo throttling
+    (rapid repeated 'max' downloads get rate-limited -> empty frames). One cached
+    frame then feeds every timeframe + EMA, so we hit Yahoo at most ~once/30min/ticker."""
+    now = time.time()
+    hit = _PRICE_CACHE.get(ticker)
+    if hit and now - hit[0] < _PRICE_TTL:
+        return hit[1]
+    df = None
+    for attempt, period in ((0, "max"), (1, "max"), (2, "15y")):
+        try:
+            df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=False)
+        except Exception:
+            df = None
+        if df is not None and not df.empty:
+            break
+        time.sleep(1.5 * (attempt + 1))   # brief backoff before retrying a throttled/empty pull
+    if df is not None and not df.empty:
+        _PRICE_CACHE[ticker] = (now, df)
+    elif hit:
+        return hit[1]                     # serve the last good frame rather than fail on a throttle
+    return df
+
+
 def _resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """Resample the single daily frame to a higher timeframe and DROP the partial
     current bar (the still-forming week/month) so HTF EMAs read off closed bars only."""
@@ -307,13 +335,10 @@ def _compute_levels(matrix: list, price: float, swing_low: float, hivol: bool,
 
 
 def compute_one(ticker: str) -> dict:
-    # ONE 'max' daily download -> resample to Weekly/Monthly. This both fixes the
-    # EMA200 warmup bug (thousands of bars, not 252) and gives the full 9-EMA
-    # multi-timeframe matrix from a single consistent vintage.
-    try:
-        df = yf.download(ticker, period="max", interval="1d", progress=False, auto_adjust=False)
-    except Exception:
-        df = yf.download(ticker, period="15y", interval="1d", progress=False, auto_adjust=False)
+    # ONE cached 'max' daily download -> resample to Weekly/Monthly. Fixes the EMA200
+    # warmup bug (thousands of bars) and gives the full 9-EMA matrix from a single
+    # consistent vintage. Cached + retried so repeated calls don't hammer Yahoo.
+    df = _download_daily_max(ticker)
     if df is None or df.empty:
         return {"error": "no data"}
     if isinstance(df.columns, pd.MultiIndex):
