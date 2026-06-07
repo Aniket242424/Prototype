@@ -1002,10 +1002,12 @@ def run_agent() -> dict:
              [("anthropic", run_agent_anthropic), ("gemini", run_agent_gemini_chain)])
     errors = []
     for i, (name, fn) in enumerate(order):
-        # Budget gate: stop using paid Claude once it has cost ANTHROPIC_BUDGET_INR.
-        if name == "anthropic" and keystore.cost_so_far("anthropic") >= ANTHROPIC_BUDGET_INR:
+        # Budget gate: stop using paid Claude once spend hits the cap. The cap is the
+        # env default unless the operator topped it up from the UI (keystore.get_budget).
+        budget = keystore.get_budget("anthropic", ANTHROPIC_BUDGET_INR)
+        if name == "anthropic" and keystore.cost_so_far("anthropic") >= budget:
             msg = (f"anthropic: budget hit (₹{keystore.cost_so_far('anthropic'):.0f} "
-                   f">= ₹{ANTHROPIC_BUDGET_INR:.0f}) — skipped to stay free")
+                   f">= ₹{budget:.0f}) — skipped to stay free")
             errors.append(msg); print(f"  [{msg}]")
             continue
         try:

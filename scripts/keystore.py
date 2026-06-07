@@ -58,6 +58,40 @@ def cost_so_far(backend: str) -> float:
     return float(_load_usage().get(backend, {}).get("cost_inr", 0.0))
 
 
+# ---------- operator-adjustable spend budget (set/topped-up from the UI) ----------
+BUDGET_FILE = Path("data/agent_budget.json")
+
+
+def _load_budget() -> dict:
+    if BUDGET_FILE.exists():
+        try:
+            return json.loads(BUDGET_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def get_budget(backend: str, default: float = 0.0) -> float:
+    """Effective spend cap for a backend: the UI-set value if present, else `default`
+    (which is the env ANTHROPIC_BUDGET_INR). Lets the operator top up from the UI."""
+    b = _load_budget().get(backend)
+    return float(b) if b is not None else float(default)
+
+
+def add_budget(backend: str, amount: float, base: float = 0.0) -> float:
+    """Top up the budget by `amount`. If none was set yet, start from `base` (the env
+    default) so 'Add ₹100' to a fresh ₹100 cap yields ₹200. Returns the new cap."""
+    d = _load_budget()
+    cur = d.get(backend)
+    new = (float(base) if cur is None else float(cur)) + float(amount)
+    d[backend] = new
+    BUDGET_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = BUDGET_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d))
+    os.replace(tmp, BUDGET_FILE)
+    return new
+
+
 def _fernet():
     k = os.getenv("TOKEN_ENCRYPTION_KEY")
     if not k:
@@ -164,8 +198,21 @@ def add_gemini_keys(new_keys: list[str]) -> int:
     return len(out)
 
 
+def _env_gemini_keys() -> list[str]:
+    """Env Gemini keys, UNLIMITED: GEMINI_API_KEY + GEMINI_API_KEY_2 .. _N (gaps OK)."""
+    vals = []
+    v = os.getenv("GEMINI_API_KEY")
+    if v:
+        vals.append(v)
+    for i in range(2, 101):              # supports up to 100 env keys, tolerates gaps
+        v = os.getenv(f"GEMINI_API_KEY_{i}")
+        if v:
+            vals.append(v)
+    return vals
+
+
 def get_gemini_keys() -> list[str]:
-    """All Gemini keys: UI list + UI single + env (GEMINI_API_KEY[_2/_3/_4]), deduped."""
+    """All Gemini keys: UI list (unlimited) + UI single + env (unlimited), deduped."""
     keys: list[str] = []
     e = _load().get("gemini_api_keys")
     if e:
@@ -181,10 +228,7 @@ def get_gemini_keys() -> list[str]:
     single = get_key("gemini_api_key")  # UI single or env GEMINI_API_KEY
     if single:
         keys.append(single)
-    for env in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4"):
-        v = os.getenv(env)
-        if v:
-            keys.append(v)
+    keys += _env_gemini_keys()
     seen, out = set(), []
     for k in keys:
         if k and k not in seen:
@@ -199,9 +243,7 @@ def mask_key(k: str) -> str:
 def gemini_key_list() -> list[dict]:
     """Each Gemini key in rotation order: {masked, source(ui/env)}."""
     ui = set(_ui_gemini_keys())
-    env_vals = {os.getenv(x) for x in
-                ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4")
-                if os.getenv(x)}
+    env_vals = set(_env_gemini_keys())
     out = []
     for i, k in enumerate(get_gemini_keys()):
         src = "ui" if k in ui else ("env" if k in env_vals else "ui")

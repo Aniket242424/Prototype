@@ -242,8 +242,10 @@ def render(r: dict | None) -> str:
     gu = usage.get("gemini", {}); au = usage.get("anthropic", {})
     g_used = f"{gu.get('calls', 0)} runs · {gu.get('tokens_in', 0) + gu.get('tokens_out', 0):,} tok · ₹0 (free)"
     a_cost = au.get("cost_inr", 0.0)
-    a_used = f"{au.get('calls', 0)} runs · ₹{a_cost:.0f} of ₹{ANTHROPIC_BUDGET_INR:.0f} budget"
-    a_over = a_cost >= ANTHROPIC_BUDGET_INR
+    a_budget = (keystore.get_budget("anthropic", ANTHROPIC_BUDGET_INR)
+                if hasattr(keystore, "get_budget") else ANTHROPIC_BUDGET_INR)
+    a_used = f"{au.get('calls', 0)} runs · ₹{a_cost:.0f} of ₹{a_budget:.0f} budget"
+    a_over = a_cost >= a_budget
     active_key = (r or {}).get("_meta", {}).get("gemini_key", "")
     _rows = ""
     for k in keystore.gemini_key_list():
@@ -330,7 +332,8 @@ def render(r: dict | None) -> str:
       <div class="kblock">
         <div class="kname">Claude / Anthropic <span class="muted">(paid fallback — only used if all Gemini keys fail)</span></div>
         <div class="kmask">{a_keymask} <span class="ksrc">[{a_src}]</span></div>
-        <div class="kusage {'over' if a_over else ''}">usage: {a_used}{' · STOPPED (budget hit)' if a_over else ''}</div>
+        <div class="kusage {'over' if a_over else ''}">usage: {a_used}{' · STOPPED (budget hit — add budget to resume)' if a_over else ''}</div>
+        <button onclick="addBudget()" class="addbtn">+ Add ₹100 to Claude budget</button>
         <input id="akey" type="password" placeholder="paste new Claude key (sk-ant-…)" />
         <button onclick="saveKey('anthropic_api_key','akey')">Save</button>
         <button onclick="resetUsage()" class="rstbtn">Reset usage</button>
@@ -405,6 +408,14 @@ async function resetUsage(){{
   const el=document.getElementById('ksave'); el.textContent='resetting…';
   try{{ await fetch('/api/resetusage',{{method:'POST'}}); el.textContent='✓ usage reset — reloading…';
     setTimeout(()=>location.reload(),700);
+  }}catch(e){{ el.textContent='error: '+e; }}
+}}
+async function addBudget(){{
+  const el=document.getElementById('ksave'); el.textContent='adding ₹100…';
+  try{{ const r=await fetch('/api/addbudget',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{amount:100}})}}); const d=await r.json();
+    el.textContent = d.ok ? ('✓ Claude budget now ₹'+d.budget+' — reloading…') : ('error: '+(d.error||''));
+    if(d.ok) setTimeout(()=>location.reload(),900);
   }}catch(e){{ el.textContent='error: '+e; }}
 }}
 async function runNow(){{
@@ -499,6 +510,7 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .evtag{display:inline-block;font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;margin-right:5px}
 .evtag.hot{background:#fdecea;color:#c62828}.evtag.soft{background:#e8f5e9;color:#00875a}
 .evpi{font-size:11px;font-weight:700;margin-top:8px}
+.addbtn{margin-top:6px;background:#1f2937 !important;color:#fff !important;border:0 !important;border-radius:6px;padding:7px 14px;font-weight:700;cursor:pointer}
 .krow{display:grid;grid-template-columns:200px 200px 1fr 70px;gap:8px;align-items:center;margin-bottom:8px}
 .kname{font-weight:600;color:var(--strong)}.kmask{font-family:monospace;color:var(--muted)}.ksrc{font-size:10px}
 .krow input{padding:6px 8px;border:1px solid var(--border);border-radius:5px}
@@ -593,6 +605,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/resetusage":
                 keystore.reset_usage()
                 self._send(json.dumps({"ok": True}).encode(), "application/json")
+                return
+            if self.path == "/api/addbudget":
+                amt = float(body.get("amount", 100) or 100)
+                new = keystore.add_budget("anthropic", amt, base=ANTHROPIC_BUDGET_INR)
+                self._send(json.dumps({"ok": True, "budget": round(new)}).encode(), "application/json")
                 return
             if self.path == "/api/cleargemini":
                 keystore.set_gemini_keys([])
