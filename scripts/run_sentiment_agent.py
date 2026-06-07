@@ -1114,9 +1114,14 @@ def main() -> None:
     read = run_agent()
     store(read)
     report(read)
-    # Log this prediction for grading ~1 trading day from now.
+    # Log this prediction for grading ~1 trading day from now — but ONLY for a real
+    # read. A degraded "both backends unavailable" neutral (no assets / backend=none)
+    # must not pollute the track record.
     try:
-        log_prediction(read)
+        if read.get("assets") and not (read.get("_meta") or {}).get("error"):
+            log_prediction(read)
+        else:
+            print("  [skipped logging prediction — degraded/empty read]")
     except Exception as e:
         print(f"  [log_prediction failed: {e}]")
 
