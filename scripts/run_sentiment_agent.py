@@ -933,28 +933,39 @@ def run_agent_gemini(model: str | None = None, api_key: str | None = None) -> di
         "data, war/geopolitics, big-tech/chips, policy), then write your complete market read per "
         "your instructions. Cover every asset above with its support level and what happens if it breaks."
     )
-    r1 = _gemini_generate(
-        client, model=model, contents=research,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM,
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-            temperature=0.3, max_output_tokens=6000,
-        ),
-    )
-    analysis = (r1.text or "").strip()
-
     # GROUNDING GUARD: if Google Search did NOT fire, the model is answering from
-    # stale training memory (the source of the 38,000-Dow hallucination). Reject
-    # so the dispatcher fails over to Claude (which has reliable web search).
-    grounded = False
-    try:
-        gm = r1.candidates[0].grounding_metadata
-        grounded = bool(gm and (getattr(gm, "web_search_queries", None)
+    # stale training memory (the source of the 38,000-Dow hallucination). But search
+    # firing is NON-DETERMINISTIC — a perfectly good key often skips search on the
+    # first try and grounds on a retry. So RETRY the same key (with a stronger search
+    # nudge) before giving up; only fail over to the next key/Claude if it stays
+    # ungrounded. This is what makes a working key reliably produce a free read.
+    def _is_grounded(resp) -> bool:
+        try:
+            gm = resp.candidates[0].grounding_metadata
+            return bool(gm and (getattr(gm, "web_search_queries", None)
                                 or getattr(gm, "grounding_chunks", None)))
-    except Exception:
-        grounded = False
+        except Exception:
+            return False
+
+    analysis, grounded = "", False
+    for attempt in range(3):
+        nudge = ("" if attempt == 0 else
+                 "\n\nYou did NOT search. You MUST call Google Search FIRST and base every "
+                 "claim on the results — do not answer from memory.")
+        r1 = _gemini_generate(
+            client, model=model, contents=research + nudge,
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+                temperature=0.3 if attempt == 0 else 0.5, max_output_tokens=6000,
+            ),
+        )
+        if _is_grounded(r1):
+            analysis, grounded = (r1.text or "").strip(), True
+            break
+        print(f"  [gemini grounding miss (attempt {attempt + 1}/3) — retrying search]")
     if not grounded:
-        raise RuntimeError("Gemini answer was NOT grounded (no web search) — failing over to Claude")
+        raise RuntimeError("Gemini answer was NOT grounded after 3 tries — failing over")
 
     # Step 2 — structure the analysis into strict JSON (no tools).
     r2 = _gemini_generate(
