@@ -101,6 +101,34 @@ def _warm_loop():
         time.sleep(300)   # refresh tracked-asset cache every 5 min
 
 
+WATCHLIST_FILE = Path("data/watchlist.json")
+
+
+def _read_watch() -> list:
+    try:
+        return json.loads(WATCHLIST_FILE.read_text()).get("tickers", []) if WATCHLIST_FILE.exists() else []
+    except Exception:
+        return []
+
+
+def _write_watch(tickers: list) -> None:
+    WATCHLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = WATCHLIST_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"tickers": tickers}))
+    os.replace(tmp, WATCHLIST_FILE)
+
+
+def _watchlist_panel() -> str:
+    wl = _read_watch()
+    chips = "".join(
+        f"<span class='wchip'>{_esc(tk)} <a onclick=\"removeWatch('{_esc(tk)}')\">✕</a></span>" for tk in wl)
+    inner = chips if wl else ("<span class='muted'>No extra scrips yet — search any scrip above and click "
+                              "<b>⏰ Alert me near EMA</b> to add it.</span>")
+    return (f"<div class='panel'><div class='panel-title'>⏰ EMA alert watchlist "
+            f"<span class='muted'>· Telegram trade alert when these (+ the tracked assets) come near a support EMA</span></div>"
+            f"<div class='wlwrap'>{inner}</div></div>")
+
+
 def cached_lookup(q: str) -> dict:
     key = q.strip().lower()
     now = time.time()
@@ -241,7 +269,10 @@ def _lookup_html(d: dict) -> str:
         if cr:
             sup += f"<div class='lkres'>▼ RESISTANCE {cr.get('value', 0):,.2f} ({_esc(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)</div>"
     table = _ema_table(d.get("matrix"), ns.get("members"))
-    return head + sup + _bounce_line(d.get("latest_bounce"), show_none=True) + table
+    tk = _esc(d.get("ticker", ""))
+    watch_btn = (f"<button class='watchbtn' onclick=\"addWatch('{tk}')\">⏰ Alert me near EMA</button>"
+                 if tk else "")
+    return head + sup + _bounce_line(d.get("latest_bounce"), show_none=True) + table + watch_btn
 
 
 def _trackrecord_panel() -> str:
@@ -458,6 +489,7 @@ def render(r: dict | None) -> str:
     </div>
     <div id="lookout" class="lookout"></div>
   </div>
+{_watchlist_panel()}
 {_trackrecord_panel()}
 {body}{keypanel}
   <div class="foot">Gemini (free) → Claude (fallback) → neutral. Not financial advice. Auto-refreshes every 20s.</div>
@@ -476,6 +508,17 @@ async function lookupScrip(){{
 function clearLookup(){{
   document.getElementById('scripq').value='';
   document.getElementById('lookout').innerHTML='';
+}}
+async function addWatch(tk){{
+  try{{ const r=await fetch('/api/watch',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{action:'add',ticker:tk}})}}); const d=await r.json();
+    alert(d.ok ? (tk+' added — you\\'ll get a Telegram trade alert when it nears a support EMA. ('+d.count+' watched)') : ('error: '+(d.error||'')));
+  }}catch(e){{ alert('error: '+e); }}
+}}
+async function removeWatch(tk){{
+  try{{ await fetch('/api/watch',{{method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{action:'remove',ticker:tk}})}}); location.reload();
+  }}catch(e){{}}
 }}
 async function saveKey(name, inputId){{
   const v = document.getElementById(inputId).value.trim(); if(!v) return;
@@ -633,6 +676,10 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .ktbl tr.kact td{background:var(--green-soft,#e8f5e9);color:var(--green);font-weight:700}
 .foot{color:var(--muted);font-size:11px;text-align:center;margin-top:8px}
 .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+.watchbtn{margin-top:8px;background:#1f2937;color:#fff;border:0;border-radius:6px;padding:7px 13px;font-weight:700;cursor:pointer}
+.wlwrap{display:flex;flex-wrap:wrap;gap:8px}
+.wchip{background:#eef;color:#3949ab;border-radius:14px;padding:4px 10px;font-size:12px;font-weight:700;font-family:monospace}
+.wchip a{color:#c62828;cursor:pointer;margin-left:4px;font-weight:700}
 /* ---- mobile / narrow screens ---- */
 @media(max-width:760px){
   main{padding:12px 12px}
@@ -736,6 +783,16 @@ class Handler(BaseHTTPRequestHandler):
                 amt = float(body.get("amount", 100) or 100)
                 new = keystore.add_budget("anthropic", amt, base=ANTHROPIC_BUDGET_INR)
                 self._send(json.dumps({"ok": True, "budget": round(new)}).encode(), "application/json")
+                return
+            if self.path == "/api/watch":
+                action = body.get("action"); tk = (body.get("ticker") or "").strip()
+                wl = _read_watch()
+                if action == "add" and tk and tk not in wl:
+                    wl.append(tk)
+                elif action == "remove" and tk in wl:
+                    wl.remove(tk)
+                _write_watch(wl)
+                self._send(json.dumps({"ok": True, "count": len(wl)}).encode(), "application/json")
                 return
             if self.path == "/api/cleargemini":
                 keystore.set_gemini_keys([])
