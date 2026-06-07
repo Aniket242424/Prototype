@@ -63,17 +63,19 @@ ASSETS = {
     "Dow Jones": "^DJI",       # spot indices (recognizable values, not futures)
     "Nasdaq 100": "^NDX",      # US Tech 100 (~29,000), matches heavyweight weights
     "S&P 500": "^GSPC",
+    "Tesla": "TSLA",           # single stock — Nasdaq/S&P heavyweight, high-beta
     "Nifty 50": "^NSEI",
     "Bank Nifty": "^NSEBANK",
     "Bitcoin": "BTC-USD",
     "Gold": "GC=F",
+    "Crude Oil": "CL=F",       # WTI crude futures
 }
 
 # --- Multi-timeframe EMA support config (CRDS: Confluence-Ranked Dynamic Support) ---
 _TF_SPECS = [("Daily", "D"), ("Weekly", "W-FRI"), ("Monthly", "ME")]
 _SPANS = [20, 50, 200]
 _TF_WEIGHT = {"Daily": 0.3, "Weekly": 0.6, "Monthly": 1.0}  # higher TF = defended by bigger size
-_HIVOL = {"BTC-USD", "GC=F"}  # wider confluence/near tolerance for volatile assets
+_HIVOL = {"BTC-USD", "GC=F", "TSLA", "CL=F"}  # wider confluence/near tolerance for volatile assets
 
 
 # ============================================================
@@ -827,9 +829,11 @@ _ALIASES = {
     "Dow Jones": ["dow", "djia"],
     "Nasdaq 100": ["nasdaq", "ndx", "100"],
     "S&P 500": ["s&p", "spx", "gspc", "500"],
+    "Tesla": ["tesla", "tsla"],
     "Bank Nifty": ["bank nifty", "banknifty", "nifty bank", "nsebank", "bank"],
     "Nifty 50": ["nifty 50", "nifty50", "nifty"],
     "Bitcoin": ["bitcoin", "btc"],
+    "Crude Oil": ["crude", "wti", "oil", "brent"],
     "Gold": ["gold", "xau"],
 }
 
@@ -971,8 +975,8 @@ def run_agent_gemini(model: str | None = None, api_key: str | None = None) -> di
     r2 = _gemini_generate(
         client, model=model,
         contents=("Convert this market analysis into the required JSON. Keep it faithful. "
-                  "Include ALL SEVEN assets (Dow Jones, Nasdaq 100, S&P 500, Nifty 50, Bank Nifty, "
-                  "Bitcoin, Gold), each with support + if_breaks. Also fill event_scenarios with the "
+                  "Include ALL NINE assets (Dow Jones, Nasdaq 100, S&P 500, Tesla, Nifty 50, Bank Nifty, "
+                  "Bitcoin, Gold, Crude Oil), each with support + if_breaks. Also fill event_scenarios with the "
                   "2-4 biggest upcoming scheduled events (each: event, when, consensus, if_hot, if_soft, "
                   "priced_in). 'when' MUST include the exact date AND release time in both ET and IST "
                   "(e.g. 'Tue Jun 10 2026, 8:30 AM ET = 6:00 PM IST'). For every asset, 'bias' must be "
