@@ -46,9 +46,33 @@ _LOOKUP_TTL = 600  # seconds
 try:
     from run_sentiment_agent import lookup_scrip as _lookup_scrip
     from run_sentiment_agent import track_record_stats as _track_record_stats
+    from run_sentiment_agent import compute_one as _compute_one
+    from run_sentiment_agent import ASSETS as _AGENT_ASSETS
 except Exception:
     _lookup_scrip = None
     _track_record_stats = None
+    _compute_one = None
+    _AGENT_ASSETS = {}
+
+
+_TECH_CACHE: dict = {}
+
+
+def cached_tech(name: str, ticker: str) -> dict:
+    """Live technicals for a tracked asset (cached 10 min), so newly-added assets
+    show on the dashboard immediately — before the next AI read covers them."""
+    now = time.time()
+    hit = _TECH_CACHE.get(ticker)
+    if hit and now - hit[0] < 600:
+        return hit[1]
+    with _lookup_lock:
+        t = _compute_one(ticker)
+    if isinstance(t, dict):
+        t["name"] = name
+        t["ticker"] = ticker
+        if not t.get("error"):
+            _TECH_CACHE[ticker] = (now, t)
+    return t
 
 
 def cached_lookup(q: str) -> dict:
@@ -325,7 +349,25 @@ def render(r: dict | None) -> str:
         cats_html = (f"<div class='panel'><div class='panel-title'>Catalysts ahead</div>"
                      f"<ul class='lst'>{cats}</ul></div>") if cats else ""
         events_html = _events_html(r.get("event_scenarios", []))
-        body = gauge + drivers_html + events_html + assets_html + cats_html
+        # Technical cards for tracked assets the AI read hasn't covered yet (e.g. just
+        # added, or the last read was degraded) — computed live so they show NOW.
+        extra_html = ""
+        if _compute_one is not None and _AGENT_ASSETS:
+            covered = {(a.get("name") or "").lower() for a in r.get("assets", [])}
+            missing = [(nm, tk) for nm, tk in _AGENT_ASSETS.items() if nm.lower() not in covered]
+            blocks = ""
+            for nm, tk in missing:
+                try:
+                    t = cached_tech(nm, tk)
+                    if isinstance(t, dict) and not t.get("error"):
+                        blocks += f"<div class='acard'>{_lookup_html(t)}</div>"
+                except Exception:
+                    pass
+            if blocks:
+                extra_html = (f"<div class='panel'><div class='panel-title'>Tracked assets — technical view "
+                              f"<span class='muted'>· live levels now · AI bias added on the next read</span></div>"
+                              f"<div class='agrid'>{blocks}</div></div>")
+        body = gauge + drivers_html + events_html + assets_html + extra_html + cats_html
         meta_line = (f"backend {backend_badge} · {m.get('tokens_in',0)}+{m.get('tokens_out',0)} tok · "
                      f"cost ₹{cost} · {m.get('as_of','')[:19].replace('T',' ')} UTC")
 
