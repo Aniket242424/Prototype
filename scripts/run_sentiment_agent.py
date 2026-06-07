@@ -404,8 +404,17 @@ SUBMIT_TOOL = {
                 "if_breaks": {"type": "string", "description": "what happens if that support breaks, and the ONLY things that could lift it back: a positive-news catalyst or a rally in the index's heavyweight stock (e.g. Reliance for Nifty, Apple/Nvidia for Nasdaq)"}},
                 "required": ["name", "bias", "signal", "support", "if_breaks"]}},
             "catalysts_ahead": {"type": "array", "items": {"type": "string"}},
+            "event_scenarios": {"type": "array", "description": "2-4 biggest SCHEDULED upcoming events with conditional impact",
+                "items": {"type": "object", "properties": {
+                    "event": {"type": "string", "description": "e.g. 'US May CPI'"},
+                    "when": {"type": "string", "description": "EXACT date AND release time in BOTH ET and IST, e.g. 'Tue Jun 10 2026, 8:30 AM ET = 6:00 PM IST'. Use fixed known times: CPI/PCE/NFP 8:30 AM ET, FOMC 2:00 PM ET, RBI ~10:00 AM IST"},
+                    "consensus": {"type": "string", "description": "the market's expectation / consensus figure"},
+                    "if_hot": {"type": "string", "description": "market impact if HOT / hawkish / above-consensus"},
+                    "if_soft": {"type": "string", "description": "market impact if SOFT / dovish / below-consensus"},
+                    "priced_in": {"type": "string", "description": "how much is already priced in: fully / partly / not priced"}},
+                    "required": ["event", "when", "consensus", "if_hot", "if_soft", "priced_in"]}},
         },
-        "required": ["overall", "confidence", "why_moving", "summary", "drivers", "assets", "catalysts_ahead"],
+        "required": ["overall", "confidence", "why_moving", "summary", "drivers", "assets", "catalysts_ahead", "event_scenarios"],
     },
 }
 
@@ -433,6 +442,8 @@ INDEX HEAVYWEIGHTS you must reason with (approximate weights; web-search if you 
 - S&P 500: the "Magnificent Seven" (Apple, Microsoft, Nvidia, Amazon, Meta, Alphabet, Tesla) ~30% — same mega-caps drive it.
 - DOW JONES: price-weighted — high-priced names (Goldman Sachs, UnitedHealth, Microsoft, Home Depot, Caterpillar) carry the most points.
 - Use this to say things like "Nifty support 23,800; if it breaks, only a Reliance/HDFC Bank bounce or a positive RBI/global cue can lift it."
+
+EVENT IMPACT (scenario analysis) — identify the 2-4 BIGGEST scheduled upcoming events you find via web search (e.g. US CPI/PCE, jobs report/NFP, FOMC/RBI/ECB decisions, major earnings like Nvidia). For EACH, give: when = the EXACT date AND release time, shown in BOTH the event's local time and IST (the operator is in India), e.g. "Tue Jun 10 2026, 8:30 AM ET = 6:00 PM IST". Major releases have FIXED, well-known times — use them precisely: US CPI/PCE/NFP/jobless claims = 8:30 AM ET; FOMC rate decision = 2:00 PM ET (statement) + 2:30 PM ET presser; RBI policy ≈ 10:00 AM IST; ECB = 2:15 PM CET. Also give the CONSENSUS expectation, what happens to markets IF the print is HOT/hawkish/above-consensus vs SOFT/dovish/below-consensus, and how much is ALREADY PRICED IN. Only include events you actually found dated in your search — never invent a date or a consensus number; if unsure of the consensus, say "consensus unclear". This lets the operator pre-position: "CPI Tue Jun 10, 6:00 PM IST — hot print sinks Nasdaq, soft print rips it; market only partly hedged."
 
 Be specific and cite what you saw. Avoid hedging mush. If it's genuinely mixed, say neutral.
 
@@ -487,7 +498,7 @@ def run_agent_anthropic() -> dict:
     if parsed is None:
         parsed = {"overall": "neutral", "confidence": 0, "why_moving": "agent_no_submit",
                   "summary": "Agent did not return a structured read.", "drivers": [],
-                  "assets": [], "catalysts_ahead": []}
+                  "assets": [], "catalysts_ahead": [], "event_scenarios": []}
     cost_usd = usage["input_tokens"] / 1e6 * 3.0 + usage["output_tokens"] / 1e6 * 15.0
     tech = all_technicals()
     parsed = _enrich_with_technicals(parsed, tech)   # real levels override LLM numbers
@@ -511,7 +522,7 @@ def _extract_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
     return {"overall": "neutral", "confidence": 0, "why_moving": "parse_error",
-            "summary": text[:300], "drivers": [], "assets": [], "catalysts_ahead": []}
+            "summary": text[:300], "drivers": [], "assets": [], "catalysts_ahead": [], "event_scenarios": []}
 
 
 # ============================================================
@@ -790,6 +801,15 @@ class _Asset(BaseModel):
     if_breaks: str
 
 
+class _Event(BaseModel):
+    event: str          # e.g. "US May CPI"
+    when: str           # e.g. "Jun 10" / "Jun 16-17 (FOMC)"
+    consensus: str      # market expectation, e.g. "headline ~3.1% YoY expected"
+    if_hot: str         # market impact if the print is HOT / hawkish / above-consensus
+    if_soft: str        # market impact if SOFT / dovish / below-consensus
+    priced_in: str      # how much is already priced in: "fully" / "partly" / "not priced"
+
+
 class _Sentiment(BaseModel):
     overall: Bias
     confidence: int
@@ -798,6 +818,7 @@ class _Sentiment(BaseModel):
     drivers: list[str]
     assets: list[_Asset]
     catalysts_ahead: list[str]
+    event_scenarios: list[_Event]
 
 
 # Order matters: Bank Nifty must come BEFORE Nifty 50 (so "bank nifty" isn't
@@ -866,17 +887,26 @@ def _gemini_generate(client, **kw):
 
 
 def run_agent_gemini_chain() -> dict:
-    """Try every (Gemini key × model) combo in turn — rotate across the user's
-    Gmail keys and free models. Only raise if ALL fail (then dispatcher → Claude)."""
+    """Try every (Gemini key × model) combo in turn. The STARTING key rotates each
+    hour so all keys SHARE the free quota — previously it always started at key#1,
+    so #1 did every run and keys #2/#3 only ran as failover (showed 0 usage). With
+    N keys on hourly cron each key now does ~1/N of the runs, tripling the free
+    headroom before we ever touch paid Claude. Failover still works (a failed key
+    falls through to the next). Only raises if ALL fail (then dispatcher → Claude)."""
     keys = keystore.get_gemini_keys()
     if not keys:
         raise RuntimeError("No Gemini key set (UI or GEMINI_API_KEY)")
     models = GEMINI_MODELS or [GEMINI_MODEL]
+    n = len(keys)
+    start = datetime.now(timezone.utc).hour % n          # rotate primary key by hour
+    order = list(range(start, n)) + list(range(0, start))
     last = None
-    for ki, key in enumerate(keys):
+    for ki in order:
         for m in models:
             try:
-                return run_agent_gemini(m, key)
+                read = run_agent_gemini(m, keys[ki])
+                read.setdefault("_meta", {})["gemini_key_idx"] = ki + 1  # which key actually served
+                return read
             except Exception as e:
                 last = e
                 print(f"  [gemini key#{ki + 1} {m} failed: {str(e)[:110]}]")
@@ -931,7 +961,10 @@ def run_agent_gemini(model: str | None = None, api_key: str | None = None) -> di
         client, model=model,
         contents=("Convert this market analysis into the required JSON. Keep it faithful. "
                   "Include ALL SEVEN assets (Dow Jones, Nasdaq 100, S&P 500, Nifty 50, Bank Nifty, "
-                  "Bitcoin, Gold), each with support + if_breaks. For every asset, 'bias' must be "
+                  "Bitcoin, Gold), each with support + if_breaks. Also fill event_scenarios with the "
+                  "2-4 biggest upcoming scheduled events (each: event, when, consensus, if_hot, if_soft, "
+                  "priced_in). 'when' MUST include the exact date AND release time in both ET and IST "
+                  "(e.g. 'Tue Jun 10 2026, 8:30 AM ET = 6:00 PM IST'). For every asset, 'bias' must be "
                   "EXACTLY one of: bullish, bearish, neutral (never 'uptrend'/'downtrend').\n\n" + analysis),
         config=types.GenerateContentConfig(
             response_mime_type="application/json", response_schema=_Sentiment,
@@ -991,7 +1024,7 @@ def run_agent() -> dict:
         "why_moving": "both LLM backends unavailable",
         "summary": "Sentiment agent could not run (both Gemini and Claude failed). "
                    "Last errors: " + " | ".join(errors),
-        "drivers": [], "assets": [], "catalysts_ahead": [],
+        "drivers": [], "assets": [], "catalysts_ahead": [], "event_scenarios": [],
         "_meta": {"as_of": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                   "backend": "none", "error": True, "errors": errors,
                   "tokens_in": 0, "tokens_out": 0, "cost_inr": 0.0},
@@ -1029,9 +1062,17 @@ def format_telegram(r: dict, flipped: bool) -> str:
         sup = _tesc(a.get("support", ""))
         sup = (sup[:60] + "…") if len(sup) > 60 else sup
         lines.append(f"• <b>{_tesc(a.get('name'))}</b> [{a.get('bias')}] — supp {sup}")
-    cats = r.get("catalysts_ahead", [])
-    if cats:
-        lines.append("\n📅 " + _tesc("; ".join(str(x) for x in cats[:2])))
+    evs = r.get("event_scenarios", [])
+    if evs:
+        lines.append("\n📅 <b>Event impact:</b>")
+        for e in evs[:3]:
+            lines.append(f"• <b>{_tesc(e.get('event'))}</b> ({_tesc(e.get('when'))}): "
+                         f"hot→{_tesc(e.get('if_hot',''))[:50]} | soft→{_tesc(e.get('if_soft',''))[:50]} "
+                         f"<i>[{_tesc(e.get('priced_in',''))}]</i>")
+    else:
+        cats = r.get("catalysts_ahead", [])
+        if cats:
+            lines.append("\n📅 " + _tesc("; ".join(str(x) for x in cats[:2])))
     m = r.get("_meta", {})
     lines.append(f"\n<code>{m.get('backend', '?')} · ₹{m.get('cost_inr', 0)}</code> · 43.204.64.180:8002")
     return "\n".join(lines)

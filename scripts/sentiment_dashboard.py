@@ -211,6 +211,29 @@ def _trackrecord_panel() -> str:
             f"<div class='trrow'>{pills}</div>{atable}{miss_html}</div>")
 
 
+def _events_html(events: list) -> str:
+    """Event-impact scenarios: each upcoming event with if-hot / if-soft / priced-in."""
+    if not events:
+        return ""
+    cards = ""
+    for e in events:
+        pi = (e.get("priced_in") or "").lower()
+        picol = ("#c62828" if "not" in pi else "#b7791f" if ("part" in pi) else
+                 "#00875a" if "full" in pi else "#9b9b9b")
+        cards += f"""
+        <div class="evcard">
+          <div class="evhead"><span class="evname">{_esc(e.get('event',''))}</span></div>
+          <div class="evwhen">🕑 {_esc(e.get('when',''))}</div>
+          <div class="evcons"><span class="lbl">CONSENSUS</span> {_esc(e.get('consensus',''))}</div>
+          <div class="evrow evhot"><span class="evtag hot">IF HOT ▲</span> {_esc(e.get('if_hot',''))}</div>
+          <div class="evrow evsoft"><span class="evtag soft">IF SOFT ▼</span> {_esc(e.get('if_soft',''))}</div>
+          <div class="evpi" style="color:{picol}">● priced in: {_esc(e.get('priced_in',''))}</div>
+        </div>"""
+    return (f"<div class='panel'><div class='panel-title'>📅 Event impact — what moves the market next "
+            f"<span class='muted'>· if HOT vs if SOFT · is it priced in?</span></div>"
+            f"<div class='evgrid'>{cards}</div></div>")
+
+
 def render(r: dict | None) -> str:
     g_summary = keystore.gemini_keys_summary()
     a_keymask = keystore.masked("anthropic_api_key", "ANTHROPIC_API_KEY") or "(not set)"
@@ -288,7 +311,8 @@ def render(r: dict | None) -> str:
         cats = "".join(f"<li>{_esc(c)}</li>" for c in r.get("catalysts_ahead", []))
         cats_html = (f"<div class='panel'><div class='panel-title'>Catalysts ahead</div>"
                      f"<ul class='lst'>{cats}</ul></div>") if cats else ""
-        body = gauge + drivers_html + assets_html + cats_html
+        events_html = _events_html(r.get("event_scenarios", []))
+        body = gauge + drivers_html + events_html + assets_html + cats_html
         meta_line = (f"backend {backend_badge} · {m.get('tokens_in',0)}+{m.get('tokens_out',0)} tok · "
                      f"cost ₹{cost} · {m.get('as_of','')[:19].replace('T',' ')} UTC")
 
@@ -465,6 +489,16 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .trpill .trv{font-size:26px;font-weight:800;line-height:1}
 .trpill .trl{font-size:11px;color:var(--muted);margin-top:3px}
 .trmiss{margin-top:10px;font-size:12px}.trmiss .lst{margin:4px 0 0;color:#b71c1c}
+.evgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.evcard{border:1px solid var(--border);border-radius:8px;padding:12px;background:#fafafa}
+.evhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+.evname{font-weight:700;color:var(--strong)}
+.evwhen{display:inline-block;font-size:12px;font-weight:700;color:#3949ab;background:#eef;padding:3px 9px;border-radius:5px;margin-bottom:8px}
+.evcons{font-size:12px;color:var(--muted);margin-bottom:8px}
+.evrow{font-size:12px;line-height:1.5;margin-top:3px}
+.evtag{display:inline-block;font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;margin-right:5px}
+.evtag.hot{background:#fdecea;color:#c62828}.evtag.soft{background:#e8f5e9;color:#00875a}
+.evpi{font-size:11px;font-weight:700;margin-top:8px}
 .krow{display:grid;grid-template-columns:200px 200px 1fr 70px;gap:8px;align-items:center;margin-bottom:8px}
 .kname{font-weight:600;color:var(--strong)}.kmask{font-family:monospace;color:var(--muted)}.ksrc{font-size:10px}
 .krow input{padding:6px 8px;border:1px solid var(--border);border-radius:5px}
