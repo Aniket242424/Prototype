@@ -59,8 +59,9 @@ _TECH_CACHE: dict = {}
 
 
 def cached_tech(name: str, ticker: str) -> dict:
-    """Live technicals for a tracked asset (cached 10 min), so newly-added assets
-    show on the dashboard immediately — before the next AI read covers them."""
+    """Live technicals for a tracked asset (cached 10 min). Called by the BACKGROUND
+    warmer, never inside an HTTP render — a render must never block on a Yahoo
+    download (that's what blanked the page on slow/throttled pulls)."""
     now = time.time()
     hit = _TECH_CACHE.get(ticker)
     if hit and now - hit[0] < 600:
@@ -73,6 +74,31 @@ def cached_tech(name: str, ticker: str) -> dict:
         if not t.get("error"):
             _TECH_CACHE[ticker] = (now, t)
     return t
+
+
+def _tech_cached_only(ticker: str):
+    """Render-safe: return the cached technicals or None — NEVER computes/downloads."""
+    hit = _TECH_CACHE.get(ticker)
+    return hit[1] if hit else None
+
+
+def _warm_loop():
+    """Background thread: keep tracked-asset technicals warm in the cache so the page
+    render is always instant (no synchronous Yahoo download in the request path)."""
+    while True:
+        try:
+            if _compute_one is not None and _AGENT_ASSETS:
+                r = load_latest() or {}
+                covered = {(a.get("name") or "").lower() for a in r.get("assets", [])}
+                for nm, tk in _AGENT_ASSETS.items():
+                    if nm.lower() not in covered:
+                        try:
+                            cached_tech(nm, tk)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        time.sleep(300)   # refresh tracked-asset cache every 5 min
 
 
 def cached_lookup(q: str) -> dict:
@@ -367,16 +393,16 @@ def render(r: dict | None) -> str:
         cats_html = (f"<div class='panel'><div class='panel-title'>Catalysts ahead</div>"
                      f"<ul class='lst'>{cats}</ul></div>") if cats else ""
         events_html = _events_html(r.get("event_scenarios", []))
-        # Technical cards for tracked assets the AI read hasn't covered yet (e.g. just
-        # added, or the last read was degraded) — computed live so they show NOW.
+        # Technical cards for tracked assets the AI read hasn't covered yet — read from
+        # the warmed cache ONLY (never download here, or a slow Yahoo pull blanks the page).
         extra_html = ""
-        if _compute_one is not None and _AGENT_ASSETS:
+        if _AGENT_ASSETS:
             covered = {(a.get("name") or "").lower() for a in r.get("assets", [])}
             missing = [(nm, tk) for nm, tk in _AGENT_ASSETS.items() if nm.lower() not in covered]
             blocks = ""
             for nm, tk in missing:
                 try:
-                    t = cached_tech(nm, tk)
+                    t = _tech_cached_only(tk)
                     if isinstance(t, dict) and not t.get("error"):
                         blocks += f"<div class='acard'>{_lookup_html(t)}</div>"
                 except Exception:
@@ -499,14 +525,17 @@ async function runNow(){{
     if(n>40){{ clearInterval(t); b.disabled=false; b.textContent='⟳ Run now'; }}
   }}, 3000);
 }}
-// Auto-refresh the sentiment read — but DON'T wipe a scrip search result the
-// user is reading (or a query they're typing). Resume once the search is cleared.
-setInterval(()=>{{
+// Auto-refresh: only reload when a genuinely NEW read has landed (no constant 20s
+// flashing / blanking on mobile), and never while a search result is up or you're typing.
+setInterval(async ()=>{{
   const out=document.getElementById('lookout');
   const q=document.getElementById('scripq');
-  const busy=(out && out.innerHTML.trim()!=='') || (q && (document.activeElement===q || q.value.trim()!==''));
-  if(!busy) location.reload();
-}}, 20000);
+  if((out && out.innerHTML.trim()!=='') || (q && (document.activeElement===q || q.value.trim()!==''))) return;
+  try{{
+    const r=await fetch('/api/sentiment',{{cache:'no-store'}}); const d=await r.json();
+    if(d && d._fresh) location.reload();
+  }}catch(e){{}}
+}}, 30000);
 </script></body></html>"""
 
 
@@ -724,6 +753,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     print(f"Market Sentiment dashboard on http://0.0.0.0:{PORT}")
+    if _compute_one is not None:
+        threading.Thread(target=_warm_loop, daemon=True).start()   # keep tracked-asset cache warm
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 
