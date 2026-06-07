@@ -31,9 +31,9 @@ from run_sentiment_agent import compute_one, send_telegram, ASSETS, _HIVOL  # no
 WATCHLIST = Path("data/watchlist.json")
 STATE = Path("data/ema_alert_state.json")
 
-# How close (price vs EMA, %) counts as "near". Wider for high-beta names.
-NEAR_PCT = float(os.getenv("EMA_ALERT_NEAR_PCT", "1.0"))
-NEAR_PCT_HIVOL = float(os.getenv("EMA_ALERT_NEAR_PCT_HIVOL", "2.0"))
+# How close (price vs EMA, %) counts as "near" — tight 0.3% so price is right AT the EMA.
+NEAR_PCT = float(os.getenv("EMA_ALERT_NEAR_PCT", "0.3"))
+NEAR_PCT_HIVOL = float(os.getenv("EMA_ALERT_NEAR_PCT_HIVOL", "0.3"))
 # Need enough historical tests before we quote a probability (else it's noise).
 MIN_TESTS = int(os.getenv("EMA_ALERT_MIN_TESTS", "8"))
 # EMAs we watch as support (timeframe, span).
@@ -90,6 +90,7 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
     stop_pct = 2.5 if hivol else 1.0          # stop a buffer below the EMA (a daily close below = broken)
     matrix = t.get("matrix") or {}
     disp = t.get("name") or name
+    ns = t.get("nearest_support") or {}
     sf = t.get("structural_floor") or {}
     cr = t.get("controlling_resistance") or {}
 
@@ -102,38 +103,61 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
         if not c or c.get("v") is None:
             continue
         pct = c.get("pct")                    # (price/ema-1)*100
-        if pct is None or not (-0.3 <= pct <= near):   # at/just above the EMA = pulling back to support
-            continue
-        rate, tests, held = c.get("rate"), c.get("tests") or 0, c.get("held")
-        if rate is None or tests < MIN_TESTS:
+        if pct is None or abs(pct) > near:    # within `near`% of the EMA (either side)
             continue
         ema = c["v"]
-        hits[f"{ticker}|{tf}|{span}"] = True
-        verdict = "🟢 high-prob bounce" if rate >= 65 else ("🟡 decent odds" if rate >= 50 else "🔴 often breaks")
-        # trade idea: enter near the EMA, stop a buffer below it, target = typical bounce off it
-        stop = ema * (1 - stop_pct / 100)
-        typ = _typical_bounce_pct(t, f"{span} EMA")
-        if typ and typ > 0:
-            target, tnote = price * (1 + typ / 100), f"+{typ:.1f}% typical bounce"
-        elif cr.get("value") and cr["value"] > price:
-            target, tnote = cr["value"], f"resistance ({cr.get('members', '')})"
+        if pct >= 0:
+            # ---- LONG: price at/just above the EMA = pulling back to SUPPORT ----
+            rate, tests, held = c.get("rate"), c.get("tests") or 0, c.get("held")
+            if rate is None or tests < MIN_TESTS:
+                continue
+            hits[f"{ticker}|L|{tf}|{span}"] = True
+            verdict = "🟢 high-prob bounce" if rate >= 65 else ("🟡 decent odds" if rate >= 50 else "🔴 often breaks")
+            stop = ema * (1 - stop_pct / 100)
+            typ = _typical_bounce_pct(t, f"{span} EMA")
+            if typ and typ > 0:
+                target, tnote = price * (1 + typ / 100), f"+{typ:.1f}% typical bounce"
+            elif cr.get("value") and cr["value"] > price:
+                target, tnote = cr["value"], f"resistance ({cr.get('members', '')})"
+            else:
+                target, tnote = price * (1 + 2 * stop_pct / 100), "≈2x risk"
+            risk, reward = price - stop, target - price
+            rr = (reward / risk) if risk > 0 and reward > 0 else None
+            nxt = (f"{_fmt(sf['value'])} ({sf.get('members', '')}, {sf.get('grade', '')})"
+                   if sf.get("value") and sf["value"] < stop else "prior swing low")
+            blocks.append(
+                f"• <b>LONG · {tf} {span} EMA</b> {_fmt(ema)} ({pct:+.2f}% away) — held <b>{rate}%</b> ({held}/{tests}) {verdict}\n"
+                f"   ▸ BUY ~{_fmt(price)} · SL {_fmt(stop)} (-{stop_pct:.1f}%, daily close) · "
+                f"target {_fmt(target)} ({tnote})" + (f" · R:R ~1:{rr:.1f}" if rr else "") + "\n"
+                f"   ▸ if BREAKS down → next floor {nxt}")
         else:
-            target, tnote = price * (1 + 2 * stop_pct / 100), "≈2x risk"
-        risk, reward = price - stop, target - price
-        rr = (reward / risk) if risk > 0 and reward > 0 else None
-        # where it goes IF it breaks (next floor below the stop)
-        nxt = (f"{_fmt(sf['value'])} ({sf.get('members', '')}, {sf.get('grade', '')})"
-               if sf.get("value") and sf["value"] < stop else "prior swing low")
-
-        blocks.append(
-            f"• <b>{tf} {span} EMA</b> {_fmt(ema)} ({pct:+.1f}% away) — held <b>{rate}%</b> ({held}/{tests}) {verdict}\n"
-            f"   ▸ TRADE: buy ~{_fmt(price)} · SL {_fmt(stop)} (-{stop_pct:.1f}%, on daily close) · "
-            f"target {_fmt(target)} ({tnote})" + (f" · R:R ~1:{rr:.1f}" if rr else "") + "\n"
-            f"   ▸ if it BREAKS (closes below SL) → next floor {nxt}")
+            # ---- SHORT: price at/just below the EMA = rallying into RESISTANCE ----
+            rrate, rtests, rejd = c.get("reject_rate"), c.get("reject_tests") or 0, c.get("rejected")
+            if rrate is None or rtests < MIN_TESTS:
+                continue
+            hits[f"{ticker}|S|{tf}|{span}"] = True
+            verdict = "🟢 high-prob short" if rrate >= 65 else ("🟡 decent odds" if rrate >= 50 else "🔴 often breaks up")
+            stop = ema * (1 + stop_pct / 100)
+            tgt = (ns.get("value") if ns.get("value") and ns["value"] < price else
+                   (sf.get("value") if sf.get("value") and sf["value"] < price else None))
+            if tgt:
+                drop = (price / tgt - 1) * 100
+                target, tnote = tgt, f"{ns.get('members', 'support')}, -{drop:.1f}%"
+            else:
+                target, tnote = price * (1 - 2 * stop_pct / 100), "≈2x risk"
+            risk, reward = stop - price, price - target
+            rr = (reward / risk) if risk > 0 and reward > 0 else None
+            up = (f"{_fmt(cr['value'])} ({cr.get('members', '')})"
+                  if cr.get("value") and cr["value"] > stop else "trend turns up")
+            blocks.append(
+                f"• <b>SHORT · {tf} {span} EMA</b> {_fmt(ema)} ({pct:+.2f}% away) — rejected <b>{rrate}%</b> ({rejd}/{rtests}) {verdict}\n"
+                f"   ▸ SELL ~{_fmt(price)} · SL {_fmt(stop)} (+{stop_pct:.1f}%, daily close) · "
+                f"target {_fmt(target)} ({tnote})" + (f" · R:R ~1:{rr:.1f}" if rr else "") + "\n"
+                f"   ▸ if BREAKS up → next resistance {up}")
 
     if not blocks:
         return "", {}
-    head = f"🎯 <b>{disp}</b> {_fmt(price)} — at a support EMA:"
+    head = f"🎯 <b>{disp}</b> {_fmt(price)} — at an EMA (±{near:.1f}%):"
     b = (t.get("latest_bounce") or {}).get("daily") or []
     foot = ""
     if b:

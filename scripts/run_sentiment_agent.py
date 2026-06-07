@@ -143,6 +143,36 @@ def _hold_stats(close: pd.Series, ema: pd.Series, hivol: bool, fwd: int = 5) -> 
     return {"tests": tests, "held": held, "rate": (round(100 * held / tests) if tests >= 4 else None)}
 
 
+def _reject_stats(close: pd.Series, ema: pd.Series, hivol: bool, fwd: int = 5) -> dict:
+    """Short-side mirror of _hold_stats: how often this EMA REJECTED price as
+    resistance — price rallied UP from below to touch the EMA and then FAILED to
+    close decisively above it within `fwd` bars (so it got rejected and fell back).
+    A high reject-rate = a high-probability SHORT. Returns {tests, rejected, rate}."""
+    c = close.dropna()
+    e = ema.reindex(c.index)
+    cv, ev = c.values.astype(float), e.values.astype(float)
+    n = len(cv)
+    tol = 0.02 if hivol else 0.01
+    brk = 0.02 if hivol else 0.01
+    if n < fwd + 5:
+        return {"tests": 0, "rejected": 0, "rate": None}
+    tests = rejected = 0
+    last = -999
+    for j in range(1, n - fwd):
+        if np.isnan(ev[j]) or np.isnan(ev[j - 1]):
+            continue
+        below_before = cv[j - 1] < ev[j - 1] * (1 - tol)         # was clearly below
+        touched = ev[j] * (1 - tol) <= cv[j] <= ev[j] * (1 + tol)  # rallied up into the EMA
+        if below_before and touched and (j - last) > fwd:
+            last = j
+            tests += 1
+            fut_c, fut_e = cv[j + 1:j + 1 + fwd], ev[j + 1:j + 1 + fwd]
+            broke_above = bool(np.any(fut_c > fut_e * (1 + brk)))  # closed decisively above = NOT rejected
+            if not broke_above:
+                rejected += 1
+    return {"tests": tests, "rejected": rejected, "rate": (round(100 * rejected / tests) if tests >= 4 else None)}
+
+
 def _scan_bounces(frame: pd.DataFrame, tf_label: str, hivol: bool,
                   min_rally: float, lookback: int, win: int, k: int = 3) -> list:
     """The last `k` CONFIRMED bounces off a 20/50/200 EMA on ONE timeframe frame,
@@ -352,8 +382,9 @@ def compute_one(ticker: str) -> dict:
         cc = _resample_ohlc(df, rule)["Close"].dropna()
         for span in _SPANS:
             val, status, slope = _ema_level(cc, span)
-            hold = (_hold_stats(cc, cc.ewm(span=span, adjust=True).mean(), hivol)
-                    if val else {"tests": 0, "held": 0, "rate": None})
+            ema_series = cc.ewm(span=span, adjust=True).mean()
+            hold = (_hold_stats(cc, ema_series, hivol) if val else {"tests": 0, "held": 0, "rate": None})
+            rej = (_reject_stats(cc, ema_series, hivol) if val else {"tests": 0, "rejected": 0, "rate": None})
             matrix.append({"tf": tf, "span": span, "value": val, "status": status, "slope": slope})
             md[(tf, span)] = val
             label = f"{tf[0]}{span}"               # D20 / W50 / M200
@@ -363,6 +394,7 @@ def compute_one(ticker: str) -> dict:
                 "role": (None if val is None else ("support" if val <= price else "resistance")),
                 "pct": (round((price / val - 1) * 100, 2) if val else None),
                 "held": hold["held"], "tests": hold["tests"], "rate": hold["rate"],
+                "reject_rate": rej["rate"], "reject_tests": rej["tests"], "rejected": rej["rejected"],
             }
 
     lo20 = float(df["Low"].tail(20).min()); hi20 = float(df["High"].tail(20).max())
