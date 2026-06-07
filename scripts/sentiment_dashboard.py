@@ -160,14 +160,28 @@ def _ema_table(matrix: dict | None, nearest_members: str | None) -> str:
             f"<th>200 EMA</th></tr></thead><tbody>{rows}</tbody></table>")
 
 
-def _bounce_line(b: dict | None) -> str:
-    """One-line 'last bounced off which EMA' badge for cards + lookup results."""
-    if not b:
-        return ""
-    ago = "today" if b.get("bars_ago") == 0 else f"{b.get('bars_ago')}d ago"
-    return (f"<div class='abounce'><span class='lbl'>LAST BOUNCE</span> "
-            f"↩ off <b>{_esc(b.get('ema',''))}</b> on {_esc(b.get('date',''))} ({ago}) "
-            f"— rallied <b>+{b.get('rally_pct')}%</b></div>")
+def _bounce_line(b: dict | None, show_none: bool = False) -> str:
+    """Last 3 EMA bounces on Daily + Weekly (each: EMA, date, price range, rally %).
+    More bounces off an EMA = it's more reliably respected. show_none=True prints an
+    explicit note when there's been no qualifying bounce (fresh-technicals contexts)."""
+    daily = (b or {}).get("daily") or []
+    weekly = (b or {}).get("weekly") or []
+    if not daily and not weekly:
+        return ("<div class='abounce bmuted'>↩ No significant EMA bounce recently "
+                "(price hasn't pulled back to &amp; rallied &ge;2% off an EMA)</div>" if show_none else "")
+
+    def _items(lst):
+        return "".join(
+            f"<li><b>{_esc(x.get('ema', ''))}</b> {_esc(x.get('date', ''))} "
+            f"<span class='bago'>({_esc(x.get('ago', ''))})</span>: "
+            f"{x.get('from_px'):,.2f} → {x.get('to_px'):,.2f} <b>+{x.get('rally_pct')}%</b></li>"
+            for x in lst)
+    out = "<div class='abounce'><span class='lbl'>LAST BOUNCES</span>"
+    if daily:
+        out += f"<div class='bgrp'><span class='btf'>Daily</span><ul class='blist'>{_items(daily)}</ul></div>"
+    if weekly:
+        out += f"<div class='bgrp'><span class='btf'>Weekly</span><ul class='blist'>{_items(weekly)}</ul></div>"
+    return out + "</div>"
 
 
 def _lookup_html(d: dict) -> str:
@@ -197,7 +211,7 @@ def _lookup_html(d: dict) -> str:
         if cr:
             sup += f"<div class='lkres'>▼ RESISTANCE {cr.get('value', 0):,.2f} ({_esc(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)</div>"
     table = _ema_table(d.get("matrix"), ns.get("members"))
-    return head + sup + _bounce_line(d.get("latest_bounce")) + table
+    return head + sup + _bounce_line(d.get("latest_bounce"), show_none=True) + table
 
 
 def _trackrecord_panel() -> str:
@@ -526,7 +540,10 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .aprice{font-family:monospace;font-weight:700;color:var(--strong);margin-bottom:6px}
 .asig{color:var(--text);line-height:1.5;margin-bottom:8px}
 .asup,.abrk{font-size:12px;line-height:1.5;margin-top:4px}.asup{color:#00695c}.abrk{color:#b71c1c}
-.abounce{font-size:12px;line-height:1.5;margin-top:4px;color:#5b3a9b}
+.abounce{font-size:12px;line-height:1.5;margin-top:4px;color:#5b3a9b}.abounce.bmuted{color:var(--muted)}
+.abounce .lbl{display:inline-block;margin-bottom:3px}
+.bgrp{margin-top:2px}.btf{font-size:10px;font-weight:700;text-transform:uppercase;color:#3949ab}
+.blist{margin:1px 0 4px;padding-left:16px}.blist li{margin:1px 0}.bago{color:var(--muted)}
 .lbl{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:3px;background:#fff;border:1px solid var(--border);margin-right:4px}
 .emat{width:100%;border-collapse:separate;border-spacing:3px;margin-top:10px;font-family:monospace}
 .emat th{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;padding:2px 4px;text-align:center}

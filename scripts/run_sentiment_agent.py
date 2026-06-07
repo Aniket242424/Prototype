@@ -143,49 +143,68 @@ def _hold_stats(close: pd.Series, ema: pd.Series, hivol: bool, fwd: int = 5) -> 
     return {"tests": tests, "held": held, "rate": (round(100 * held / tests) if tests >= 4 else None)}
 
 
-def _latest_bounce(df: pd.DataFrame, hivol: bool, lookback: int = 150) -> dict | None:
-    """Find the MOST RECENT SIGNIFICANT bounce off a DAILY EMA (20/50/200): price
-    pulled back to the EMA from above, closed back above it, then RALLIED at least
-    ~2% (indices) / ~3% (high-beta) off that EMA within the next ~12 bars. Tells you
-    which EMA is currently being respected as a launchpad.
-    Returns {ema, date, bars_ago, ema_value, low, rally_pct} or None."""
-    c = df["Close"].dropna()
-    low = df["Low"].reindex(c.index)
-    high = df["High"].reindex(c.index)
-    cv, lv, hv = c.values.astype(float), low.values.astype(float), high.values.astype(float)
-    n = len(cv)
+def _scan_bounces(frame: pd.DataFrame, tf_label: str, hivol: bool,
+                  min_rally: float, lookback: int, win: int, k: int = 3) -> list:
+    """The last `k` SIGNIFICANT bounces off a 20/50/200 EMA on ONE timeframe frame,
+    most-recent first. Each: price pulled back to the EMA from above, closed back
+    above it, then RALLIED >= min_rally% off it within `win` bars. More bounces off
+    the same EMA = it's more reliably respected (higher-probability launchpad).
+    A `win`-bar cooldown keeps these as DISTINCT pullbacks, not the same one twice."""
+    c = frame["Close"].dropna()
+    n = len(c)
     if n < 25:
-        return None
+        return []
+    low = frame["Low"].reindex(c.index).values.astype(float)
+    high = frame["High"].reindex(c.index).values.astype(float)
+    cv = c.values.astype(float)
     tol = 0.02 if hivol else 0.01          # low must reach within tol of the EMA
     deep = 0.03 if hivol else 0.015        # but not gap far below (that's a break, not a touch)
-    min_rally = 3.0 if hivol else 2.0      # require a REAL bounce: rallied >= this % off the EMA
-    win = 12                               # bars to realise the rally
-    spans = [("20 EMA", 20), ("50 EMA", 50), ("200 EMA", 200)]
-    best = None
-    for label, span in spans:
-        if n < 3 * span:
-            continue
-        ev = c.ewm(span=span, adjust=True).mean().values
-        start = max(1, n - lookback)
-        for i in range(n - 2, start, -1):  # walk back from most recent
-            if np.isnan(ev[i]) or np.isnan(ev[i - 1]):
+    unit = {"Weekly": "w", "Monthly": "mo"}.get(tf_label, "d")
+    emas = {span: c.ewm(span=span, adjust=True).mean().values
+            for span in (20, 50, 200) if n >= 3 * span}
+    events, last_i, i, stop = [], n + 999, n - 2, max(1, n - lookback)
+    while i > stop and len(events) < k:
+        if last_i - i <= win:              # cooldown — same pullback already counted
+            i -= 1; continue
+        pick = None
+        for span, label in ((20, "20 EMA"), (50, "50 EMA"), (200, "200 EMA")):
+            ev = emas.get(span)
+            if ev is None or np.isnan(ev[i]) or np.isnan(ev[i - 1]):
                 continue
-            was_above = cv[i - 1] > ev[i - 1]                       # pullback, not a cross-up
-            touched = ev[i] * (1 - deep) <= lv[i] <= ev[i] * (1 + tol)
-            held = cv[i] > ev[i]                                    # closed back above the EMA
+            was_above = cv[i - 1] > ev[i - 1]
+            touched = ev[i] * (1 - deep) <= low[i] <= ev[i] * (1 + tol)
+            held = cv[i] > ev[i]
             if not (was_above and touched and held):
                 continue
-            peak = float(np.max(hv[i + 1:min(i + 1 + win, n)])) if i + 1 < n else cv[i]
-            rally = (peak / ev[i] - 1) * 100                        # how far it rallied off the EMA
-            if rally >= min_rally:                                  # a SIGNIFICANT bounce
-                if best is None or i > best["_i"]:
-                    best = {"_i": i, "ema": label, "date": c.index[i].date().isoformat(),
-                            "bars_ago": int(n - 1 - i), "ema_value": round(float(ev[i]), 2),
-                            "low": round(float(lv[i]), 2), "rally_pct": round(float(rally), 1)}
-                break                                              # most recent qualifying bounce for this EMA
-    if best:
-        best.pop("_i", None)
-    return best
+            peak = float(np.max(high[i + 1:min(i + 1 + win, n)])) if i + 1 < n else cv[i]
+            rally = (peak / ev[i] - 1) * 100
+            if rally >= min_rally and (pick is None or abs(low[i] - ev[i]) < pick["_d"]):
+                pick = {"_d": abs(low[i] - ev[i]), "label": label, "from": ev[i],
+                        "to": peak, "rally": rally}
+        if pick:
+            ago = int(n - 1 - i)
+            events.append({"tf": tf_label, "ema": pick["label"],
+                           "date": c.index[i].date().isoformat(),
+                           "ago": (f"{ago}{unit} ago" if ago > 0 else "latest bar"),
+                           "from_px": round(float(pick["from"]), 2),
+                           "to_px": round(float(pick["to"]), 2),
+                           "rally_pct": round(float(pick["rally"]), 1)})
+            last_i = i
+        i -= 1
+    return events
+
+
+def _latest_bounce(df: pd.DataFrame, hivol: bool) -> dict | None:
+    """The last 3 significant EMA bounces on BOTH the DAILY and WEEKLY timeframe.
+    Returns {'daily': [...], 'weekly': [...]} (lists, most-recent first) or None if
+    there's been no qualifying bounce on either."""
+    daily = _scan_bounces(df, "Daily", hivol,
+                          min_rally=(3.0 if hivol else 2.0), lookback=150, win=12)
+    weekly = _scan_bounces(_resample_ohlc(df, "W-FRI"), "Weekly", hivol,
+                           min_rally=(6.0 if hivol else 4.0), lookback=120, win=8)
+    if not daily and not weekly:
+        return None
+    return {"daily": daily, "weekly": weekly}
 
 
 def _resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:

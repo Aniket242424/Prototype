@@ -293,11 +293,20 @@ def _format_scrip(d: dict) -> str:
             sup += f"\n   floor {sf.get('value', 0):,.2f} ({html.escape(sf.get('members', ''))}, {sf.get('grade', '')})"
         if cr:
             sup += f"\n▼ <b>RESISTANCE</b> {cr.get('value', 0):,.2f} ({html.escape(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)"
-    b = d.get("latest_bounce")
-    if b:
-        ago = "today" if b.get("bars_ago") == 0 else f"{b.get('bars_ago')}d ago"
-        sup += (f"\n↩ <b>Last bounce</b>: {html.escape(str(b.get('ema', '')))} on "
-                f"{html.escape(str(b.get('date', '')))} ({ago}) — rallied +{b.get('rally_pct')}%")
+    b = d.get("latest_bounce") or {}
+    daily, weekly = b.get("daily") or [], b.get("weekly") or []
+    if daily or weekly:
+        sup += "\n↩ <b>Last bounces</b>:"
+        for tf_name, lst in (("Daily", daily), ("Weekly", weekly)):
+            if not lst:
+                continue
+            rows = "; ".join(
+                f"{html.escape(str(x.get('ema', '')))} {html.escape(str(x.get('date', '')))} "
+                f"{x.get('from_px'):,.2f}→{x.get('to_px'):,.2f} (+{x.get('rally_pct')}%)"
+                for x in lst)
+            sup += f"\n  <i>{tf_name}</i>: {rows}"
+    else:
+        sup += "\n↩ <i>No significant EMA bounce recently</i>"
     m = d.get("matrix") or {}
 
     def _cell(tf: str, sp: int) -> str:
