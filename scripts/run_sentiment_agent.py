@@ -143,6 +143,51 @@ def _hold_stats(close: pd.Series, ema: pd.Series, hivol: bool, fwd: int = 5) -> 
     return {"tests": tests, "held": held, "rate": (round(100 * held / tests) if tests >= 4 else None)}
 
 
+def _latest_bounce(df: pd.DataFrame, hivol: bool, lookback: int = 150) -> dict | None:
+    """Find the MOST RECENT SIGNIFICANT bounce off a DAILY EMA (20/50/200): price
+    pulled back to the EMA from above, closed back above it, then RALLIED at least
+    ~2% (indices) / ~3% (high-beta) off that EMA within the next ~12 bars. Tells you
+    which EMA is currently being respected as a launchpad.
+    Returns {ema, date, bars_ago, ema_value, low, rally_pct} or None."""
+    c = df["Close"].dropna()
+    low = df["Low"].reindex(c.index)
+    high = df["High"].reindex(c.index)
+    cv, lv, hv = c.values.astype(float), low.values.astype(float), high.values.astype(float)
+    n = len(cv)
+    if n < 25:
+        return None
+    tol = 0.02 if hivol else 0.01          # low must reach within tol of the EMA
+    deep = 0.03 if hivol else 0.015        # but not gap far below (that's a break, not a touch)
+    min_rally = 3.0 if hivol else 2.0      # require a REAL bounce: rallied >= this % off the EMA
+    win = 12                               # bars to realise the rally
+    spans = [("20 EMA", 20), ("50 EMA", 50), ("200 EMA", 200)]
+    best = None
+    for label, span in spans:
+        if n < 3 * span:
+            continue
+        ev = c.ewm(span=span, adjust=True).mean().values
+        start = max(1, n - lookback)
+        for i in range(n - 2, start, -1):  # walk back from most recent
+            if np.isnan(ev[i]) or np.isnan(ev[i - 1]):
+                continue
+            was_above = cv[i - 1] > ev[i - 1]                       # pullback, not a cross-up
+            touched = ev[i] * (1 - deep) <= lv[i] <= ev[i] * (1 + tol)
+            held = cv[i] > ev[i]                                    # closed back above the EMA
+            if not (was_above and touched and held):
+                continue
+            peak = float(np.max(hv[i + 1:min(i + 1 + win, n)])) if i + 1 < n else cv[i]
+            rally = (peak / ev[i] - 1) * 100                        # how far it rallied off the EMA
+            if rally >= min_rally:                                  # a SIGNIFICANT bounce
+                if best is None or i > best["_i"]:
+                    best = {"_i": i, "ema": label, "date": c.index[i].date().isoformat(),
+                            "bars_ago": int(n - 1 - i), "ema_value": round(float(ev[i]), 2),
+                            "low": round(float(lv[i]), 2), "rally_pct": round(float(rally), 1)}
+                break                                              # most recent qualifying bounce for this EMA
+    if best:
+        best.pop("_i", None)
+    return best
+
+
 def _resample_ohlc(df: pd.DataFrame, rule: str) -> pd.DataFrame:
     """Resample the single daily frame to a higher timeframe and DROP the partial
     current bar (the still-forming week/month) so HTF EMAs read off closed bars only."""
@@ -261,6 +306,7 @@ def compute_one(ticker: str) -> dict:
     lo20 = float(df["Low"].tail(20).min()); hi20 = float(df["High"].tail(20).max())
     rsi = round(_rsi(df["Close"]), 1)
     lv = _compute_levels(matrix, price, lo20, hivol, hold_by_label)
+    bounce = _latest_bounce(df, hivol)
 
     ema50, ema200 = md[("Daily", 50)], md[("Daily", 200)]
     d20, d50, d200 = md[("Daily", 20)], md[("Daily", 50)], md[("Daily", 200)]
@@ -290,6 +336,7 @@ def compute_one(ticker: str) -> dict:
         "controlling_resistance": lv["controlling_resistance"],
         "confluence_zones": lv["confluence_zones"],
         "no_ema_support": lv["no_ema_support"],
+        "latest_bounce": bounce,   # most recent EMA the price bounced off (daily)
     }
 
 
@@ -871,6 +918,7 @@ def _enrich_with_technicals(parsed: dict, tech: dict) -> dict:
             a["confluence_zones"] = t.get("confluence_zones")
             a["nearest_members"] = ns.get("members") if ns else None
             a["no_ema_support"] = t.get("no_ema_support")
+            a["latest_bounce"] = t.get("latest_bounce")
     return parsed
 
 

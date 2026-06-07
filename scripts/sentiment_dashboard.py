@@ -136,6 +136,16 @@ def _ema_table(matrix: dict | None, nearest_members: str | None) -> str:
             f"<th>200 EMA</th></tr></thead><tbody>{rows}</tbody></table>")
 
 
+def _bounce_line(b: dict | None) -> str:
+    """One-line 'last bounced off which EMA' badge for cards + lookup results."""
+    if not b:
+        return ""
+    ago = "today" if b.get("bars_ago") == 0 else f"{b.get('bars_ago')}d ago"
+    return (f"<div class='abounce'><span class='lbl'>LAST BOUNCE</span> "
+            f"↩ off <b>{_esc(b.get('ema',''))}</b> on {_esc(b.get('date',''))} ({ago}) "
+            f"— rallied <b>+{b.get('rally_pct')}%</b></div>")
+
+
 def _lookup_html(d: dict) -> str:
     """Render an on-demand scrip lookup result: header + support/resistance + EMA table."""
     if not d or d.get("error"):
@@ -163,7 +173,7 @@ def _lookup_html(d: dict) -> str:
         if cr:
             sup += f"<div class='lkres'>▼ RESISTANCE {cr.get('value', 0):,.2f} ({_esc(cr.get('members', ''))}, {cr.get('pct', 0):+.1f}%)</div>"
     table = _ema_table(d.get("matrix"), ns.get("members"))
-    return head + sup + table
+    return head + sup + _bounce_line(d.get("latest_bounce")) + table
 
 
 def _trackrecord_panel() -> str:
@@ -305,6 +315,7 @@ def render(r: dict | None) -> str:
               <div class="asig">{_esc(a.get('signal',''))}</div>
               <div class="asup"><span class="lbl">SUPPORT</span> {_esc(a.get('support',''))}</div>
               <div class="abrk"><span class="lbl">IF IT BREAKS</span> {_esc(a.get('if_breaks',''))}</div>
+              {_bounce_line(a.get('latest_bounce'))}
               {_ema_table(a.get('levels_matrix'), a.get('nearest_members'))}
             </div>"""
         assets_html = (f"<div class='panel'><div class='panel-title'>Per-asset signals</div>"
@@ -473,6 +484,7 @@ main{padding:18px 22px;max-width:1080px;margin:0 auto}
 .aprice{font-family:monospace;font-weight:700;color:var(--strong);margin-bottom:6px}
 .asig{color:var(--text);line-height:1.5;margin-bottom:8px}
 .asup,.abrk{font-size:12px;line-height:1.5;margin-top:4px}.asup{color:#00695c}.abrk{color:#b71c1c}
+.abounce{font-size:12px;line-height:1.5;margin-top:4px;color:#5b3a9b}
 .lbl{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.05em;padding:1px 5px;border-radius:3px;background:#fff;border:1px solid var(--border);margin-right:4px}
 .emat{width:100%;border-collapse:separate;border-spacing:3px;margin-top:10px;font-family:monospace}
 .emat th{font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;padding:2px 4px;text-align:center}
