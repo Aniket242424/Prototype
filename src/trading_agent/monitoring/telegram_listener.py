@@ -55,6 +55,9 @@ BACKOFF_SCHEDULE_SEC = [1, 2, 4, 8, 16, 30]
 # with yfinance lives on the host, not in this container). Default = docker bridge
 # gateway; override via SCRIP_LOOKUP_URL if the compose network gateway differs.
 SCRIP_LOOKUP_URL = os.getenv("SCRIP_LOOKUP_URL", "http://172.18.0.1:8002/api/lookup")
+_DASH_BASE = SCRIP_LOOKUP_URL.rsplit("/api/", 1)[0]
+WATCH_URL = _DASH_BASE + "/api/watch"          # add/remove a scrip from the EMA-alert watchlist
+WATCHLIST_URL = _DASH_BASE + "/api/watchlist"  # list the watchlist
 
 
 @dataclass
@@ -138,12 +141,17 @@ async def _handle_start(bot_token: str, chat_id: int) -> None:
         bot_token,
         chat_id,
         (
-            "<b>Trading agent — auth bot</b>\n\n"
-            "Commands:\n"
+            "<b>Trading agent bot — what you can ask</b>\n\n"
+            "📊 <b>Analysis</b>\n"
+            "<code>/scrip &lt;name&gt;</code> — full EMA table (support, resistance, hold-rate, last 3 bounces) "
+            "for ANY scrip. E.g. <code>/scrip reliance</code>, <code>/scrip nifty</code>, <code>/scrip AAPL</code>\n\n"
+            "⏰ <b>EMA alerts</b> (Telegram trade alert when price nears a key EMA — with probability, entry, stop, target)\n"
+            "<code>/watch &lt;name&gt;</code> — start alerting on a scrip\n"
+            "<code>/unwatch &lt;name&gt;</code> — stop alerting on it\n"
+            "<code>/watchlist</code> — show what you're watching\n\n"
+            "🔑 <b>Upstox auth</b>\n"
             "<code>/token &lt;access_token&gt;</code> — store fresh Upstox token\n"
-            "<code>/status</code> — show current token state\n"
-            "<code>/scrip &lt;name&gt;</code> — EMA support table for any scrip "
-            "(e.g. <code>/scrip reliance</code>, <code>/scrip nifty</code>)\n\n"
+            "<code>/status</code> — show current token state\n\n"
             "To get a token: open "
             '<a href="https://account.upstox.com/developer/apps">Upstox apps</a> '
             "and tap <b>Generate</b> next to Access Token, then send it here as:\n"
@@ -346,6 +354,55 @@ async def _handle_scrip(bot_token: str, chat_id: int, args: str) -> None:
     await _send_message(bot_token, chat_id, _format_scrip(data))
 
 
+async def _handle_watch(bot_token: str, chat_id: int, action: str, args: str) -> None:
+    """Add/remove a scrip from the EMA-alert watchlist (via the host dashboard)."""
+    q = args.strip()
+    if not q:
+        await _send_message(
+            bot_token, chat_id,
+            f"Usage: <code>/{action} &lt;name or ticker&gt;</code>\nE.g. <code>/{action} reliance</code>")
+        return
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(WATCH_URL, json={"action": "add" if action == "watch" else "remove", "query": q})
+        d = r.json()
+    except Exception as e:
+        await _send_message(bot_token, chat_id, f"❌ failed: <code>{html.escape(str(e))}</code>")
+        return
+    if not d.get("ok"):
+        await _send_message(bot_token, chat_id, f"❌ {html.escape(str(d.get('error', 'could not find it')))}")
+        return
+    tk, nm = html.escape(str(d.get("ticker", ""))), html.escape(str(d.get("name", "")))
+    if action == "watch":
+        await _send_message(
+            bot_token, chat_id,
+            f"✅ Watching <b>{nm}</b> <code>[{tk}]</code> — you'll get a Telegram TRADE alert (with probability, "
+            f"entry, stop, target) when it comes within 0.3% of a key EMA. Watchlist: {d.get('count')} scrip(s).")
+    else:
+        await _send_message(bot_token, chat_id, f"🗑 Removed <code>{tk}</code>. Watchlist: {d.get('count')} scrip(s).")
+
+
+async def _handle_watchlist(bot_token: str, chat_id: int) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(WATCHLIST_URL)
+        wl = r.json().get("tickers", [])
+    except Exception as e:
+        await _send_message(bot_token, chat_id, f"❌ failed: <code>{html.escape(str(e))}</code>")
+        return
+    if not wl:
+        await _send_message(
+            bot_token, chat_id,
+            "Your EMA-alert watchlist is empty. Add one: <code>/watch reliance</code>\n"
+            "<i>(The tracked indices, Tesla, BTC, Gold &amp; Crude are always monitored.)</i>")
+        return
+    items = "\n".join(f"• <code>{html.escape(tk)}</code>" for tk in wl)
+    await _send_message(
+        bot_token, chat_id,
+        f"⏰ <b>Your EMA-alert watchlist</b> ({len(wl)}):\n{items}\n\n"
+        "<i>Plus the tracked indices, Tesla, BTC, Gold &amp; Crude — always monitored.</i>")
+
+
 # ============================================================
 # Dispatcher
 # ============================================================
@@ -387,6 +444,12 @@ async def _dispatch(
         await _handle_token(bot_token, update.chat_id, args, settings)
     elif cmd in ("scrip", "s"):
         await _handle_scrip(bot_token, update.chat_id, args)
+    elif cmd == "watch":
+        await _handle_watch(bot_token, update.chat_id, "watch", args)
+    elif cmd == "unwatch":
+        await _handle_watch(bot_token, update.chat_id, "unwatch", args)
+    elif cmd in ("watchlist", "watches", "alerts"):
+        await _handle_watchlist(bot_token, update.chat_id)
     else:
         await _send_message(
             bot_token,

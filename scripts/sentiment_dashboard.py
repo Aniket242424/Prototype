@@ -47,11 +47,13 @@ try:
     from run_sentiment_agent import lookup_scrip as _lookup_scrip
     from run_sentiment_agent import track_record_stats as _track_record_stats
     from run_sentiment_agent import compute_one as _compute_one
+    from run_sentiment_agent import resolve_symbol as _resolve_symbol
     from run_sentiment_agent import ASSETS as _AGENT_ASSETS
 except Exception:
     _lookup_scrip = None
     _track_record_stats = None
     _compute_one = None
+    _resolve_symbol = None
     _AGENT_ASSETS = {}
 
 
@@ -731,6 +733,9 @@ class Handler(BaseHTTPRequestHandler):
                 r["_fresh"] = mtime > _last_mtime["v"]
                 self._send(json.dumps(r).encode(), "application/json")
                 return
+            if path == "/api/watchlist":
+                self._send(json.dumps({"tickers": _read_watch()}).encode(), "application/json")
+                return
             if path == "/api/lookup":
                 from urllib.parse import urlparse, parse_qs
                 qs = parse_qs(urlparse(self.path).query)
@@ -785,14 +790,24 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(json.dumps({"ok": True, "budget": round(new)}).encode(), "application/json")
                 return
             if self.path == "/api/watch":
-                action = body.get("action"); tk = (body.get("ticker") or "").strip()
+                action = body.get("action")
+                tk = (body.get("ticker") or "").strip()
+                name = tk
+                if not tk and body.get("query") and _resolve_symbol:   # Telegram passes a raw name
+                    rtk, rname = _resolve_symbol(body["query"])
+                    tk, name = (rtk or "").strip(), (rname or rtk or "")
+                if not tk:
+                    self._send(json.dumps({"ok": False, "error": f"could not find '{body.get('query', '')}'"}).encode(),
+                               "application/json")
+                    return
                 wl = _read_watch()
-                if action == "add" and tk and tk not in wl:
+                if action == "add" and tk not in wl:
                     wl.append(tk)
                 elif action == "remove" and tk in wl:
                     wl.remove(tk)
                 _write_watch(wl)
-                self._send(json.dumps({"ok": True, "count": len(wl)}).encode(), "application/json")
+                self._send(json.dumps({"ok": True, "count": len(wl), "ticker": tk, "name": name}).encode(),
+                           "application/json")
                 return
             if self.path == "/api/cleargemini":
                 keystore.set_gemini_keys([])
