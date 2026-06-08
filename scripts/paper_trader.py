@@ -18,7 +18,10 @@ PAPER = Path("data/paper_trades.jsonl")
 
 # Current-month FUT lot sizes (Indian F&O). Unknown instruments -> lot 1 (P&L in points).
 LOT_SIZES = {
+    # indices
     "^NSEI": 65, "^NSEBANK": 30, "NIFTY_FIN_SERVICE.NS": 60, "^BSESN": 20, "BSE-BANK.BO": 30,
+    # stocks
+    "INFY.NS": 400, "RELIANCE.NS": 500,
 }
 _MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 # Display base for the futures symbol (indices have their own contract names).
