@@ -10,10 +10,24 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 KEYS_FILE = Path("data/agent_keys.json")
 USAGE_FILE = Path("data/agent_usage.json")
+
+_warned_plaintext = False
+
+
+def _warn_plaintext() -> None:
+    """Loudly (once) flag that secrets are being written UNENCRYPTED — i.e. that
+    TOKEN_ENCRYPTION_KEY is missing or invalid. Production sets a valid key, so this
+    never fires there; it catches a misconfig that would otherwise silently expose keys."""
+    global _warned_plaintext
+    if not _warned_plaintext:
+        _warned_plaintext = True
+        print(f"keystore WARNING: TOKEN_ENCRYPTION_KEY missing/invalid — storing secrets in "
+              f"PLAINTEXT at {KEYS_FILE}. Set a valid Fernet key to encrypt at rest.", file=sys.stderr)
 
 
 # ---------- token usage tracking (per backend) ----------
@@ -119,6 +133,7 @@ def set_key(name: str, value: str) -> None:
     if f:
         data[name] = {"enc": True, "val": f.encrypt(value.encode()).decode()}
     else:
+        _warn_plaintext()
         data[name] = {"enc": False, "val": value}
     tmp = KEYS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data))
@@ -162,6 +177,7 @@ def set_gemini_keys(keys: list[str]) -> None:
     if f:
         data["gemini_api_keys"] = {"enc": True, "val": f.encrypt(json.dumps(cleaned).encode()).decode()}
     else:
+        _warn_plaintext()
         data["gemini_api_keys"] = {"enc": False, "val": cleaned}
     tmp = KEYS_FILE.with_suffix(".tmp"); tmp.write_text(json.dumps(data)); os.replace(tmp, KEYS_FILE)
     try:
