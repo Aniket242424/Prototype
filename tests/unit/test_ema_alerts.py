@@ -38,7 +38,7 @@ def test_no_alert_when_outside_proximity(monkeypatch):
     t = _tech(100.0, {"D20": _cell(99.0, 1.0, "support", rate=70, tests=100, held=70)})
     monkeypatch.setattr(eam, "compute_one", lambda tk: t)
     monkeypatch.setattr(eam, "NEAR_PCT", 0.3)
-    block, hits = eam.scan_one("Test", "TEST")
+    block, hits, setups = eam.scan_one("Test", "TEST")
     assert block == "" and hits == {}
 
 
@@ -49,7 +49,7 @@ def test_long_setup_within_proximity(monkeypatch):
     monkeypatch.setattr(eam, "compute_one", lambda tk: t)
     monkeypatch.setattr(eam, "NEAR_PCT", 0.3)
     monkeypatch.setattr(eam, "MIN_TESTS", 8)
-    block, hits = eam.scan_one("Test", "TEST")
+    block, hits, setups = eam.scan_one("Test", "TEST")
     assert "LONG" in block and "held <b>72%</b>" in block
     assert "TEST|L|Daily|20" in hits
     assert "SL" in block and "target" in block and "BREAKS down" in block
@@ -61,7 +61,7 @@ def test_short_setup_when_below_resistance(monkeypatch):
     monkeypatch.setattr(eam, "compute_one", lambda tk: t)
     monkeypatch.setattr(eam, "NEAR_PCT", 0.3)
     monkeypatch.setattr(eam, "MIN_TESTS", 8)
-    block, hits = eam.scan_one("Test", "TEST")
+    block, hits, setups = eam.scan_one("Test", "TEST")
     assert "SHORT" in block and "rejected <b>68%</b>" in block
     assert "TEST|S|Daily|50" in hits
     assert "BREAKS up" in block
@@ -73,7 +73,7 @@ def test_min_tests_gate_blocks_low_history(monkeypatch):
     monkeypatch.setattr(eam, "compute_one", lambda tk: t)
     monkeypatch.setattr(eam, "NEAR_PCT", 0.3)
     monkeypatch.setattr(eam, "MIN_TESTS", 8)
-    block, hits = eam.scan_one("Test", "TEST")
+    block, hits, setups = eam.scan_one("Test", "TEST")
     assert block == ""
 
 
@@ -83,13 +83,13 @@ def test_missing_reject_data_no_short(monkeypatch):
     monkeypatch.setattr(eam, "compute_one", lambda tk: t)
     monkeypatch.setattr(eam, "NEAR_PCT", 0.3)
     monkeypatch.setattr(eam, "MIN_TESTS", 8)
-    block, hits = eam.scan_one("Test", "TEST")
+    block, hits, setups = eam.scan_one("Test", "TEST")
     assert block == ""
 
 
 def test_compute_one_error_is_safe(monkeypatch):
     monkeypatch.setattr(eam, "compute_one", lambda tk: {"error": "no data"})
-    block, hits = eam.scan_one("Test", "TEST")
+    block, hits, setups = eam.scan_one("Test", "TEST")
     assert block == "" and hits == {}
 
 
@@ -97,7 +97,7 @@ def test_compute_one_exception_is_swallowed(monkeypatch):
     def boom(tk):
         raise RuntimeError("network down")
     monkeypatch.setattr(eam, "compute_one", boom)
-    block, hits = eam.scan_one("Test", "TEST")     # must not propagate
+    block, hits, setups = eam.scan_one("Test", "TEST")     # must not propagate
     assert block == "" and hits == {}
 
 

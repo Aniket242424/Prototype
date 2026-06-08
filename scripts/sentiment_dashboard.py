@@ -49,12 +49,14 @@ try:
     from run_sentiment_agent import compute_one as _compute_one
     from run_sentiment_agent import resolve_symbol as _resolve_symbol
     from run_sentiment_agent import ASSETS as _AGENT_ASSETS
+    import paper_trader as _pt
 except Exception:
     _lookup_scrip = None
     _track_record_stats = None
     _compute_one = None
     _resolve_symbol = None
     _AGENT_ASSETS = {}
+    _pt = None
 
 
 _TECH_CACHE: dict = {}
@@ -322,6 +324,61 @@ def _trackrecord_panel() -> str:
             f"<div class='trrow'>{pills}</div>{atable}{miss_html}</div>")
 
 
+def _paper_panel() -> str:
+    """The paper trade book: every EMA-alert setup auto-taken as a current-month FUT
+    paper trade (with stop-loss), marked to market and closed on target/stop."""
+    if _pt is None:
+        return ""
+    try:
+        bk = _pt.book()
+    except Exception:
+        return ""
+    st = bk["stats"]
+    title = ("<div class='panel-title'>📒 Paper trade book "
+             "<span class='muted'>· every EMA-alert setup auto-taken as a current-month FUT trade, with stop-loss</span></div>")
+    if st["open_n"] == 0 and st["closed_n"] == 0:
+        return ("<div class='panel'>" + title +
+                "<div class='muted'>No paper trades yet — one opens automatically when a watched scrip "
+                "comes within 0.3% of a key EMA (long at support / short at resistance).</div></div>")
+
+    def _money(x):
+        c = "#00875a" if x > 0 else "#c62828" if x < 0 else "var(--muted)"
+        return f"<span style='color:{c};font-weight:700'>₹{x:+,.0f}</span>"
+
+    def _pts(x):
+        c = "#00875a" if x > 0 else "#c62828" if x < 0 else "var(--muted)"
+        return f"<span style='color:{c};font-weight:700'>{x:+,.2f}</span>"
+
+    wr = f"{st['win_rate']}%" if st["win_rate"] is not None else "–"
+    pills = (f"<div class='trrow'>"
+             f"<div class='trpill'><div class='trv'>{st['open_n']}</div><div class='trl'>open</div></div>"
+             f"<div class='trpill'><div class='trv'>{wr}</div><div class='trl'>win rate ({st['wins']}/{st['closed_n']})</div></div>"
+             f"<div class='trpill'><div class='trv' style='font-size:20px'>{_money(st['realized_inr'])}</div><div class='trl'>realised</div></div>"
+             f"<div class='trpill'><div class='trv' style='font-size:20px'>{_money(st['unrealized_inr'])}</div><div class='trl'>open P&amp;L</div></div>"
+             f"</div>")
+
+    def _dir(r):
+        return ("<span style='color:#00875a;font-weight:700'>LONG</span>" if r["direction"] == "long"
+                else "<span style='color:#c62828;font-weight:700'>SHORT</span>")
+    orows = "".join(
+        f"<tr><td>{_esc(r['future'])}</td><td>{_dir(r)}</td><td>{r['entry']:,.2f}</td>"
+        f"<td style='color:#c62828'>{r['stop']:,.2f}</td><td style='color:#00875a'>{r['target']:,.2f}</td>"
+        f"<td>{r['current']:,.2f}</td><td>{_pts(r['pnl_points'])}{(' / ' + _money(r['pnl_inr'])) if r['lot'] > 1 else ''}</td></tr>"
+        for r in bk["open"])
+    open_tbl = (f"<div class='muted' style='margin-top:10px'>Open positions</div>"
+                f"<table class='ktbl'><thead><tr><th>future</th><th>side</th><th>entry</th><th>SL</th>"
+                f"<th>target</th><th>now</th><th>P&amp;L</th></tr></thead><tbody>{orows}</tbody></table>") if orows else ""
+    crows = "".join(
+        f"<tr><td>{_esc(r['future'])}</td><td>{_dir(r)}</td><td>{r['entry']:,.2f}→{r['exit']:,.2f}</td>"
+        f"<td>{'✅ target' if r['result'] == 'won' else '🛑 stop'}</td>"
+        f"<td>{_pts(r['pnl_points'])}{(' / ' + _money(r['pnl_inr'])) if r['lot'] > 1 else ''}</td></tr>"
+        for r in bk["closed"])
+    closed_tbl = (f"<div class='muted' style='margin-top:10px'>Recently closed</div>"
+                  f"<table class='ktbl'><thead><tr><th>future</th><th>side</th><th>entry→exit</th>"
+                  f"<th>result</th><th>P&amp;L</th></tr></thead><tbody>{crows}</tbody></table>") if crows else ""
+    return f"<div class='panel'>{title}{pills}{open_tbl}{closed_tbl}</div>"
+
+
 def _events_html(events: list) -> str:
     """Event-impact scenarios: each upcoming event with if-hot / if-soft / priced-in."""
     if not events:
@@ -492,6 +549,7 @@ def render(r: dict | None) -> str:
     <div id="lookout" class="lookout"></div>
   </div>
 {_watchlist_panel()}
+{_paper_panel()}
 {_trackrecord_panel()}
 {body}{keypanel}
   <div class="foot">Gemini (free) → Claude (fallback) → neutral. Not financial advice. Auto-refreshes every 20s.</div>

@@ -27,6 +27,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
 
 from run_sentiment_agent import compute_one, send_telegram, ASSETS, _HIVOL  # noqa: E402
+import paper_trader as pt  # noqa: E402
 
 WATCHLIST = Path("data/watchlist.json")
 STATE = Path("data/ema_alert_state.json")
@@ -81,9 +82,9 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
     try:
         t = compute_one(ticker)
     except Exception:
-        return "", {}
+        return "", {}, []
     if not isinstance(t, dict) or t.get("error"):
-        return "", {}
+        return "", {}, []
     price = t["price"]
     hivol = ticker in _HIVOL
     near = NEAR_PCT_HIVOL if hivol else NEAR_PCT
@@ -97,7 +98,7 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
     def _fmt(x):
         return f"{x:,.2f}"
 
-    hits, blocks = {}, []
+    setups = []
     for tf, span in EMAS:
         c = matrix.get(f"{tf[0]}{span}")
         if not c or c.get("v") is None:
@@ -111,7 +112,6 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
             rate, tests, held = c.get("rate"), c.get("tests") or 0, c.get("held")
             if rate is None or tests < MIN_TESTS:
                 continue
-            hits[f"{ticker}|L|{tf}|{span}"] = True
             verdict = "🟢 high-prob bounce" if rate >= 65 else ("🟡 decent odds" if rate >= 50 else "🔴 often breaks")
             stop = ema * (1 - stop_pct / 100)
             typ = _typical_bounce_pct(t, f"{span} EMA")
@@ -125,17 +125,15 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
             rr = (reward / risk) if risk > 0 and reward > 0 else None
             nxt = (f"{_fmt(sf['value'])} ({sf.get('members', '')}, {sf.get('grade', '')})"
                    if sf.get("value") and sf["value"] < stop else "prior swing low")
-            blocks.append(
-                f"• <b>LONG · {tf} {span} EMA</b> {_fmt(ema)} ({pct:+.2f}% away) — held <b>{rate}%</b> ({held}/{tests}) {verdict}\n"
-                f"   ▸ BUY ~{_fmt(price)} · SL {_fmt(stop)} (-{stop_pct:.1f}%, daily close) · "
-                f"target {_fmt(target)} ({tnote})" + (f" · R:R ~1:{rr:.1f}" if rr else "") + "\n"
-                f"   ▸ if BREAKS down → next floor {nxt}")
+            setups.append({"scrip": disp, "ticker": ticker, "direction": "long", "tf": tf, "span": span,
+                           "ema": ema, "entry": price, "stop": stop, "target": target, "rr": rr,
+                           "prob": rate, "n": f"{held}/{tests}", "pct": pct, "stop_pct": stop_pct,
+                           "tnote": tnote, "verdict": verdict, "if_breaks": nxt})
         else:
             # ---- SHORT: price at/just below the EMA = rallying into RESISTANCE ----
             rrate, rtests, rejd = c.get("reject_rate"), c.get("reject_tests") or 0, c.get("rejected")
             if rrate is None or rtests < MIN_TESTS:
                 continue
-            hits[f"{ticker}|S|{tf}|{span}"] = True
             verdict = "🟢 high-prob short" if rrate >= 65 else ("🟡 decent odds" if rrate >= 50 else "🔴 often breaks up")
             stop = ema * (1 + stop_pct / 100)
             tgt = (ns.get("value") if ns.get("value") and ns["value"] < price else
@@ -149,14 +147,15 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
             rr = (reward / risk) if risk > 0 and reward > 0 else None
             up = (f"{_fmt(cr['value'])} ({cr.get('members', '')})"
                   if cr.get("value") and cr["value"] > stop else "trend turns up")
-            blocks.append(
-                f"• <b>SHORT · {tf} {span} EMA</b> {_fmt(ema)} ({pct:+.2f}% away) — rejected <b>{rrate}%</b> ({rejd}/{rtests}) {verdict}\n"
-                f"   ▸ SELL ~{_fmt(price)} · SL {_fmt(stop)} (+{stop_pct:.1f}%, daily close) · "
-                f"target {_fmt(target)} ({tnote})" + (f" · R:R ~1:{rr:.1f}" if rr else "") + "\n"
-                f"   ▸ if BREAKS up → next resistance {up}")
+            setups.append({"scrip": disp, "ticker": ticker, "direction": "short", "tf": tf, "span": span,
+                           "ema": ema, "entry": price, "stop": stop, "target": target, "rr": rr,
+                           "prob": rrate, "n": f"{rejd}/{rtests}", "pct": pct, "stop_pct": stop_pct,
+                           "tnote": tnote, "verdict": verdict, "if_breaks": up})
 
-    if not blocks:
-        return "", {}
+    if not setups:
+        return "", {}, []
+    hits = {f"{s['ticker']}|{'L' if s['direction'] == 'long' else 'S'}|{s['tf']}|{s['span']}": True
+            for s in setups}
     head = f"🎯 <b>{disp}</b> {_fmt(price)} — at an EMA (±{near:.1f}%):"
     b = (t.get("latest_bounce") or {}).get("daily") or []
     foot = ""
@@ -165,40 +164,103 @@ def scan_one(name: str, ticker: str) -> tuple[str, dict]:
         tag = " ⚠ since broken" if x.get("currently") == "broken" else ""
         foot = (f"\n  ↩ last bounce: {x['ema']} {x['date']} "
                 f"{x['from_px']:,.2f}→{x['to_px']:,.2f} +{x['rally_pct']}%{tag}")
-    return head + "\n" + "\n".join(blocks) + foot, hits
+    return head + "\n" + "\n".join(_format_setup(s) for s in setups) + foot, hits, setups
+
+
+def _format_setup(s: dict) -> str:
+    """One EMA setup -> the alert text block (long or short)."""
+    def f(x):
+        return f"{x:,.2f}"
+    rr = f" · R:R ~1:{s['rr']:.1f}" if s.get("rr") else ""
+    if s["direction"] == "long":
+        return (f"• <b>LONG · {s['tf']} {s['span']} EMA</b> {f(s['ema'])} ({s['pct']:+.2f}% away) — "
+                f"held <b>{s['prob']}%</b> ({s['n']}) {s['verdict']}\n"
+                f"   ▸ BUY ~{f(s['entry'])} · SL {f(s['stop'])} (-{s['stop_pct']:.1f}%, daily close) · "
+                f"target {f(s['target'])} ({s['tnote']}){rr}\n"
+                f"   ▸ if BREAKS down → next floor {s['if_breaks']}")
+    return (f"• <b>SHORT · {s['tf']} {s['span']} EMA</b> {f(s['ema'])} ({s['pct']:+.2f}% away) — "
+            f"rejected <b>{s['prob']}%</b> ({s['n']}) {s['verdict']}\n"
+            f"   ▸ SELL ~{f(s['entry'])} · SL {f(s['stop'])} (+{s['stop_pct']:.1f}%, daily close) · "
+            f"target {f(s['target'])} ({s['tnote']}){rr}\n"
+            f"   ▸ if BREAKS up → next resistance {s['if_breaks']}")
+
+
+def _plain(msg: str) -> str:
+    for tag in ("<b>", "</b>", "<i>", "</i>"):
+        msg = msg.replace(tag, "")
+    return msg
+
+
+def _fmt_opened(trades: list) -> str:
+    lines = ["📝 <b>PAPER TRADES OPENED</b> <i>(current-month FUT, with stop-loss)</i>"]
+    for r in trades:
+        arrow = "🟢 BUY" if r["direction"] == "long" else "🔴 SELL"
+        rr = f" · R:R 1:{r['rr']:.1f}" if r.get("rr") else ""
+        lines.append(f"{arrow} <b>{r['future']}</b> @ {r['entry']:,.2f}\n"
+                     f"   SL {r['stop']:,.2f} · target {r['target']:,.2f}{rr} · {r['setup']} ({r['prob']}%)")
+    return "\n".join(lines)
+
+
+def _fmt_closed(trades: list) -> str:
+    lines = ["🏁 <b>PAPER TRADES CLOSED</b>"]
+    for r in trades:
+        emo = "✅ TARGET HIT" if r["result"] == "won" else "🛑 STOP-LOSS HIT"
+        pnl = f"{r['pnl_points']:+,.2f} pts" + (f" = ₹{r['pnl_inr']:+,.0f}" if r["lot"] > 1 else "")
+        lines.append(f"{emo} — <b>{r['future']}</b> {r['direction'].upper()} "
+                     f"{r['entry']:,.2f} → {r['exit']:,.2f}  ({pnl})")
+    return "\n".join(lines)
 
 
 def main() -> None:
     dry = "--dry-run" in sys.argv
-    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+    today = now.date().isoformat()
     sent_state = _load(STATE, {})
     sent_state = {k: d for k, d in sent_state.items() if d == today}   # keep only today's dedup keys
 
-    blocks = []
+    # 1) Mark OPEN paper trades to market; close on target (won) or STOP-LOSS (lost).
+    closed = []
+    if not dry:
+        try:
+            closed = pt.update_trades(lambda tk: (compute_one(tk) or {}).get("price"), now_iso)
+        except Exception as e:
+            print("paper update failed:", e)
+
+    blocks, opened = [], []
     for name, ticker in watched():
-        block, hits = scan_one(name, ticker)
+        block, hits, setups = scan_one(name, ticker)
+        # take EVERY suggested setup as a PAPER trade (dedup = one open per ticker/dir/EMA)
+        if not dry:
+            for s in setups:
+                tr = pt.open_trade(s, now_iso, now.month, now.year)
+                if tr:
+                    opened.append(tr)
         if not block:
             continue
-        # dedup: skip EMAs already alerted today for this scrip
-        new = {k for k in hits if sent_state.get(k) != today}
+        new = {k for k in hits if sent_state.get(k) != today}   # alert dedup: once/day per scrip-EMA
         if not new:
             continue
         for k in hits:
             sent_state[k] = today
         blocks.append(block)
 
-    if not blocks:
-        print("no new EMA-proximity alerts")
-    else:
+    if blocks:
         msg = ("📊 <b>EMA PROXIMITY ALERTS</b>\n\n" + "\n\n".join(blocks)
-               + "\n\n<i>Probability = historical hold-rate of that EMA. Not financial advice.</i>")
+               + "\n\n<i>Auto-taken as PAPER trades (current-month FUT, with stop-loss). Not advice.</i>")
         if dry:
-            print("=== DRY RUN — would send ===\n" + msg.replace("<b>", "").replace("</b>", "")
-                  .replace("<i>", "").replace("</i>", ""))
+            print("=== DRY RUN — would send ===\n" + _plain(msg))
         else:
             send_telegram(msg)
             print(f"sent EMA-proximity alert ({len(blocks)} scrip(s))")
+    else:
+        print("no new EMA-proximity alerts")
+
     if not dry:
+        if opened:
+            send_telegram(_fmt_opened(opened)); print(f"opened {len(opened)} paper trade(s)")
+        if closed:
+            send_telegram(_fmt_closed(closed)); print(f"closed {len(closed)} paper trade(s)")
         _save(STATE, sent_state)
 
 
