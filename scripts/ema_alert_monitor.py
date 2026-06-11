@@ -25,12 +25,41 @@ os.chdir(REPO_ROOT)
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from dotenv import load_dotenv  # noqa: E402
 load_dotenv(REPO_ROOT / ".env")
+from zoneinfo import ZoneInfo  # noqa: E402
 
 from run_sentiment_agent import compute_one, send_telegram, ASSETS, _HIVOL  # noqa: E402
 import paper_trader as pt  # noqa: E402
 
 WATCHLIST = Path("data/watchlist.json")
 STATE = Path("data/ema_alert_state.json")
+
+_IST = ZoneInfo("Asia/Kolkata")
+_ET = ZoneInfo("America/New_York")
+_INDIAN_INDEX = {"^NSEI", "^NSEBANK", "^BSESN", "NIFTY_FIN_SERVICE.NS", "BSE-BANK.BO"}
+
+
+def market_open(ticker: str, now=None) -> bool:
+    """Is the instrument's market OPEN right now? Stops the monitor from opening paper
+    trades on a stale closing price after hours (the "trades after market close" bug).
+    Crypto = 24/7; commodity futures (=F) = weekdays; Indian equity = 09:15-15:30 IST;
+    everything else treated as US equity = 09:30-16:00 ET. DST handled via zoneinfo."""
+    now = now or datetime.now(timezone.utc)
+    tk = ticker.upper()
+    if tk.endswith("-USD"):                       # crypto
+        return True
+    if tk.endswith("=F"):                          # commodity futures (CME ~ weekdays)
+        return now.astimezone(_ET).weekday() < 5
+    if tk.endswith(".NS") or tk.endswith(".BO") or ticker in _INDIAN_INDEX:
+        t = now.astimezone(_IST)
+        if t.weekday() >= 5:
+            return False
+        m = t.hour * 60 + t.minute
+        return 9 * 60 + 15 <= m <= 15 * 60 + 30   # 09:15-15:30 IST
+    t = now.astimezone(_ET)                        # default: US equity / index
+    if t.weekday() >= 5:
+        return False
+    m = t.hour * 60 + t.minute
+    return 9 * 60 + 30 <= m <= 16 * 60             # 09:30-16:00 ET
 
 # How close (price vs EMA, %) counts as "near" — tight 0.3% so price is right AT the EMA.
 NEAR_PCT = float(os.getenv("EMA_ALERT_NEAR_PCT", "0.3"))
@@ -227,8 +256,11 @@ def main() -> None:
         except Exception as e:
             print("paper update failed:", e)
 
-    blocks, opened = [], []
+    blocks, opened, skipped_closed = [], [], 0
     for name, ticker in watched():
+        if not market_open(ticker, now):     # market closed -> never open a trade on a stale price
+            skipped_closed += 1
+            continue
         block, hits, setups = scan_one(name, ticker)
         # take EVERY suggested setup as a PAPER trade (dedup = one open per ticker/dir/EMA)
         if not dry:
@@ -254,7 +286,7 @@ def main() -> None:
             send_telegram(msg)
             print(f"sent EMA-proximity alert ({len(blocks)} scrip(s))")
     else:
-        print("no new EMA-proximity alerts")
+        print(f"no new EMA-proximity alerts (skipped {skipped_closed} closed-market scrip(s))")
 
     if not dry:
         if opened:

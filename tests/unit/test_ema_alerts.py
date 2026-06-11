@@ -101,6 +101,38 @@ def test_compute_one_exception_is_swallowed(monkeypatch):
     assert block == "" and hits == {}
 
 
+# ----------------------------- market hours gate -----------------------------
+def _utc(y, mo, d, h, mi):
+    from datetime import datetime, timezone
+    return datetime(y, mo, d, h, mi, tzinfo=timezone.utc)
+
+
+def test_market_open_crypto_always():
+    # Saturday 3am UTC — crypto still open.
+    assert eam.market_open("BTC-USD", _utc(2026, 6, 13, 3, 0)) is True
+
+
+def test_market_open_indian_hours():
+    # Wed 2026-06-10: 10:00 IST = 04:30 UTC -> OPEN; 16:00 IST = 10:30 UTC -> CLOSED.
+    assert eam.market_open("^NSEI", _utc(2026, 6, 10, 4, 30)) is True
+    assert eam.market_open("RELIANCE.NS", _utc(2026, 6, 10, 4, 30)) is True
+    assert eam.market_open("^NSEI", _utc(2026, 6, 10, 10, 30)) is False   # 16:00 IST, after close
+    assert eam.market_open("^NSEBANK", _utc(2026, 6, 10, 12, 0)) is False  # 17:30 IST
+
+
+def test_market_open_indian_weekend_closed():
+    assert eam.market_open("^NSEI", _utc(2026, 6, 13, 5, 0)) is False      # Saturday
+
+
+def test_market_open_us_hours():
+    # Wed 2026-06-10 (EDT, UTC-4): 14:00 UTC = 10:00 ET -> OPEN; 21:00 UTC = 17:00 ET -> CLOSED.
+    assert eam.market_open("^NDX", _utc(2026, 6, 10, 14, 0)) is True
+    assert eam.market_open("TSLA", _utc(2026, 6, 10, 14, 0)) is True
+    assert eam.market_open("^DJI", _utc(2026, 6, 10, 21, 0)) is False
+    # During Indian session (04:30 UTC = 00:30 ET) US market is closed:
+    assert eam.market_open("^GSPC", _utc(2026, 6, 10, 4, 30)) is False
+
+
 # ----------------------------- typical bounce -----------------------------
 def test_typical_bounce_pct_averages_matching_ema():
     t = {"latest_bounce": {"daily": [{"ema": "50 EMA", "rally_pct": 4.0},
