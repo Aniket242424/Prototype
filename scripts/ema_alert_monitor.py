@@ -61,9 +61,10 @@ def market_open(ticker: str, now=None) -> bool:
     m = t.hour * 60 + t.minute
     return 9 * 60 + 30 <= m <= 16 * 60             # 09:30-16:00 ET
 
-# How close (price vs EMA, %) counts as "near" — tight 0.3% so price is right AT the EMA.
-NEAR_PCT = float(os.getenv("EMA_ALERT_NEAR_PCT", "0.3"))
-NEAR_PCT_HIVOL = float(os.getenv("EMA_ALERT_NEAR_PCT_HIVOL", "0.3"))
+# How close (price vs EMA, %) counts as "near". 0.5% = price right around the EMA
+# (0.3% was too tight to ever fire); override per-deployment via env.
+NEAR_PCT = float(os.getenv("EMA_ALERT_NEAR_PCT", "0.5"))
+NEAR_PCT_HIVOL = float(os.getenv("EMA_ALERT_NEAR_PCT_HIVOL", "0.5"))
 # Need enough historical tests before we quote a probability (else it's noise).
 MIN_TESTS = int(os.getenv("EMA_ALERT_MIN_TESTS", "8"))
 # EMAs we watch as support (timeframe, span).
