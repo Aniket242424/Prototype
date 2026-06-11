@@ -221,12 +221,13 @@ def _plain(msg: str) -> str:
 
 
 def _fmt_opened(trades: list) -> str:
-    lines = ["📝 <b>PAPER TRADES OPENED</b> <i>(current-month FUT, with stop-loss)</i>"]
+    lines = ["📝 <b>PAPER TRADES OPENED</b> <i>(current-month FUT · risk-sized · stop-loss)</i>"]
     for r in trades:
         arrow = "🟢 BUY" if r["direction"] == "long" else "🔴 SELL"
-        rr = f" · R:R 1:{r['rr']:.1f}" if r.get("rr") else ""
-        lines.append(f"{arrow} <b>{r['future']}</b> @ {r['entry']:,.2f}\n"
-                     f"   SL {r['stop']:,.2f} · target {r['target']:,.2f}{rr} · {r['setup']} ({r['prob']}%)")
+        lines.append(f"{arrow} <b>{r['future']}</b> @ {r['entry']:,.2f}  "
+                     f"(qty {r['qty']:g} ≈ {r['lots']:g} lot)\n"
+                     f"   SL {r['stop']:,.2f} · target {r['target']:,.2f} · <b>R:R 1:{r['rr']:.1f}</b> · "
+                     f"risk ₹{r['risk_amount']:,.0f} ({r['setup']}, {r['prob']}%)")
     return "\n".join(lines)
 
 
@@ -234,9 +235,8 @@ def _fmt_closed(trades: list) -> str:
     lines = ["🏁 <b>PAPER TRADES CLOSED</b>"]
     for r in trades:
         emo = "✅ TARGET HIT" if r["result"] == "won" else "🛑 STOP-LOSS HIT"
-        pnl = f"{r['pnl_points']:+,.2f} pts" + (f" = ₹{r['pnl_inr']:+,.0f}" if r["lot"] > 1 else "")
         lines.append(f"{emo} — <b>{r['future']}</b> {r['direction'].upper()} "
-                     f"{r['entry']:,.2f} → {r['exit']:,.2f}  ({pnl})")
+                     f"{r['entry']:,.2f} → {r['exit']:,.2f}  (₹{r['pnl_inr']:+,.0f}, {r['pnl_R']:+.1f}R)")
     return "\n".join(lines)
 
 

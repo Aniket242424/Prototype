@@ -1,12 +1,19 @@
 """
-Paper-trade book for the EMA-alert suggestions.
+Paper-trade book for the EMA-alert suggestions — CAPITAL- and RISK:REWARD-aware.
 
-Every suggested setup (from ema_alert_monitor) is auto-taken as a PAPER trade in the
-CURRENT-MONTH FUTURE of that scrip, with the suggested entry / STOP-LOSS / target.
-On each cron tick the open trades are marked to market and CLOSED when price hits the
-target (won) or the stop-loss (lost). All deterministic, all paper — no real orders.
+Every suggested setup is auto-taken as a PAPER trade in the CURRENT-MONTH FUTURE of
+that scrip, but ONLY if:
+  1. its Risk:Reward >= MIN_RR (we don't take junk-R:R trades), and
+  2. it can be sized within the per-trade risk budget.
+Position size is computed from CAPITAL: each trade risks exactly RISK_PCT of capital
+(default ₹3,00,000 @ 0.5% = ₹1,500). quantity = risk_amount / |entry - stop|, so a
+stop-out loses ~1R (the risk budget) and a target win makes ~R:R × 1R — P&L is always
+in ₹ and in R-multiples, properly scaled to capital regardless of instrument lot size.
 
-State: data/paper_trades.jsonl (one JSON object per trade).
+On each tick open trades are marked to market and CLOSED on target (won) or STOP-LOSS
+(lost). All deterministic, all paper — no real orders.
+
+State: data/paper_trades.jsonl.
 """
 from __future__ import annotations
 
@@ -16,15 +23,17 @@ from pathlib import Path
 
 PAPER = Path("data/paper_trades.jsonl")
 
-# Current-month FUT lot sizes (Indian F&O). Unknown instruments -> lot 1 (P&L in points).
+# Capital / risk policy (operator-set; see project_capital_and_risk_sizing memory).
+CAPITAL = float(os.getenv("PAPER_CAPITAL_INR", "300000"))     # ₹3,00,000
+RISK_PCT = float(os.getenv("PAPER_RISK_PCT", "0.5"))          # 0.5% per trade -> ₹1,500
+MIN_RR = float(os.getenv("PAPER_MIN_RR", "1.5"))             # reject setups below 1:1.5
+
+# Current-month FUT lot sizes (Indian F&O) — only for the "≈ N lots" display.
 LOT_SIZES = {
-    # indices
     "^NSEI": 65, "^NSEBANK": 30, "NIFTY_FIN_SERVICE.NS": 60, "^BSESN": 20, "BSE-BANK.BO": 30,
-    # stocks
     "INFY.NS": 400, "RELIANCE.NS": 500,
 }
 _MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-# Display base for the futures symbol (indices have their own contract names).
 _FUT_BASE = {"^NSEI": "NIFTY", "^NSEBANK": "BANKNIFTY", "^BSESN": "SENSEX",
              "NIFTY_FIN_SERVICE.NS": "FINNIFTY", "BSE-BANK.BO": "BANKEX"}
 
@@ -56,31 +65,36 @@ def _write(rows: list) -> None:
     os.replace(tmp, PAPER)
 
 
-def _pnl(direction: str, entry: float, px: float, lot: int) -> tuple[float, float]:
-    d = 1.0 if direction == "long" else -1.0
-    pts = (px - entry) * d
-    return round(pts, 2), round(pts * lot, 2)
-
-
 def open_trade(setup: dict, now_iso: str, month: int, year: int):
-    """Open a paper FUTURES trade from a setup. Dedup: at most one OPEN trade per
-    (ticker, direction, EMA). Returns the new trade, or None if one's already open."""
+    """Open a capital-sized paper FUTURES trade from a setup — but ONLY if it clears
+    MIN_RR and can be risk-sized. Dedup: one OPEN trade per (ticker, direction, EMA).
+    Returns the trade, or None if filtered (bad R:R) / already open / unsizable."""
+    rr = setup.get("rr")
+    if rr is None or rr < MIN_RR:                      # enforce Risk:Reward
+        return None
+    entry = round(float(setup["entry"]), 2)
+    stop = round(float(setup["stop"]), 2)
+    risk_per_unit = abs(entry - stop)
+    if risk_per_unit <= 0:
+        return None
     rows = _read()
     key = (setup["ticker"], setup["direction"], setup["tf"], setup["span"])
     for r in rows:
         if r["status"] == "open" and (r["ticker"], r["direction"], r["tf"], r["span"]) == key:
             return None
+    risk_amount = round(CAPITAL * RISK_PCT / 100.0, 2)   # ₹ risked on this trade (1R)
+    qty = risk_amount / risk_per_unit                    # units sized so a stop-out = 1R
     lot = LOT_SIZES.get(setup["ticker"], 1)
-    entry = round(float(setup["entry"]), 2)
     tr = {
         "id": f"{setup['ticker']}|{setup['direction']}|{setup['tf']}{setup['span']}|{now_iso}",
         "ts": now_iso, "scrip": setup["scrip"], "ticker": setup["ticker"],
         "future": future_label(setup["scrip"], setup["ticker"], month, year), "lot": lot,
         "direction": setup["direction"], "tf": setup["tf"], "span": setup["span"],
         "setup": f"{setup['tf']} {setup['span']} EMA", "prob": setup.get("prob"),
-        "entry": entry, "stop": round(float(setup["stop"]), 2), "target": round(float(setup["target"]), 2),
-        "rr": round(float(setup["rr"]), 2) if setup.get("rr") else None,
-        "status": "open", "current": entry, "pnl_points": 0.0, "pnl_inr": 0.0,
+        "entry": entry, "stop": stop, "target": round(float(setup["target"]), 2), "rr": round(float(rr), 2),
+        "capital": CAPITAL, "risk_amount": risk_amount, "risk_per_unit": round(risk_per_unit, 2),
+        "qty": round(qty, 4), "lots": round(qty / lot, 3),
+        "status": "open", "current": entry, "pnl_inr": 0.0, "pnl_R": 0.0,
         "exit": None, "exit_ts": None, "result": None,
     }
     rows.append(tr)
@@ -88,9 +102,16 @@ def open_trade(setup: dict, now_iso: str, month: int, year: int):
     return tr
 
 
+def _mark(r: dict, px: float) -> None:
+    d = 1.0 if r["direction"] == "long" else -1.0
+    r["current"] = round(px, 2)
+    r["pnl_inr"] = round((px - r["entry"]) * d * r["qty"], 2)
+    r["pnl_R"] = round(r["pnl_inr"] / r["risk_amount"], 2) if r.get("risk_amount") else 0.0
+
+
 def update_trades(price_fn, now_iso: str) -> list:
     """Mark every OPEN trade to market and CLOSE it on target (won) or STOP-LOSS (lost).
-    price_fn(ticker) -> latest price or None. Returns the list of trades closed this run."""
+    price_fn(ticker) -> latest price or None. Returns trades closed this run."""
     rows = _read()
     closed, cache = [], {}
     for r in rows:
@@ -106,44 +127,47 @@ def update_trades(price_fn, now_iso: str) -> list:
         if px is None:
             continue
         px = float(px)
-        r["current"] = round(px, 2)
-        r["pnl_points"], r["pnl_inr"] = _pnl(r["direction"], r["entry"], px, r["lot"])
+        _mark(r, px)
         hit = None
         if r["direction"] == "long":
             if px >= r["target"]:
                 hit = (r["target"], "won")
-            elif px <= r["stop"]:                       # STOP-LOSS
+            elif px <= r["stop"]:
                 hit = (r["stop"], "lost")
         else:
             if px <= r["target"]:
                 hit = (r["target"], "won")
-            elif px >= r["stop"]:                       # STOP-LOSS
+            elif px >= r["stop"]:
                 hit = (r["stop"], "lost")
         if hit:
             exit_px, result = hit
+            _mark(r, exit_px)
             r["status"], r["result"] = "closed", result
-            r["exit"], r["exit_ts"], r["current"] = round(exit_px, 2), now_iso, round(exit_px, 2)
-            r["pnl_points"], r["pnl_inr"] = _pnl(r["direction"], r["entry"], exit_px, r["lot"])
+            r["exit"], r["exit_ts"] = round(exit_px, 2), now_iso
             closed.append(r)
     _write(rows)
     return closed
 
 
 def book() -> dict:
-    """Open + recently-closed trades with summary stats for the dashboard."""
+    """Open + recently-closed trades with capital-aware summary stats."""
     rows = _read()
     op = [r for r in rows if r.get("status") == "open"]
     cl = [r for r in rows if r.get("status") == "closed"]
     wins = [r for r in cl if r.get("result") == "won"]
     realized = round(sum(r.get("pnl_inr", 0) for r in cl), 2)
     unreal = round(sum(r.get("pnl_inr", 0) for r in op), 2)
+    total = round(realized + unreal, 2)
     return {
         "open": op[::-1],
         "closed": cl[::-1][:40],
         "stats": {
+            "capital": CAPITAL, "risk_pct": RISK_PCT, "min_rr": MIN_RR,
+            "risk_per_trade": round(CAPITAL * RISK_PCT / 100.0, 2),
             "open_n": len(op), "closed_n": len(cl), "wins": len(wins), "losses": len(cl) - len(wins),
             "win_rate": (round(100 * len(wins) / len(cl)) if cl else None),
-            "realized_inr": realized, "unrealized_inr": unreal,
-            "total_inr": round(realized + unreal, 2),
+            "realized_inr": realized, "unrealized_inr": unreal, "total_inr": total,
+            "return_pct": round(100 * total / CAPITAL, 2) if CAPITAL else 0.0,
+            "realized_R": round(sum(r.get("pnl_R", 0) for r in cl), 2),
         },
     }

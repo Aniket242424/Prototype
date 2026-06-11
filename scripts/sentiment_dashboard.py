@@ -334,44 +334,45 @@ def _paper_panel() -> str:
     except Exception:
         return ""
     st = bk["stats"]
-    title = ("<div class='panel-title'>📒 Paper trade book "
-             "<span class='muted'>· every EMA-alert setup auto-taken as a current-month FUT trade, with stop-loss</span></div>")
+    cap = f"₹{st['capital']:,.0f} capital · risk ₹{st['risk_per_trade']:,.0f}/trade ({st['risk_pct']}%) · min R:R 1:{st['min_rr']:g}"
+    title = (f"<div class='panel-title'>📒 Paper trade book "
+             f"<span class='muted'>· {cap} · current-month FUT, with stop-loss</span></div>")
     if st["open_n"] == 0 and st["closed_n"] == 0:
         return ("<div class='panel'>" + title +
                 "<div class='muted'>No paper trades yet — one opens automatically when a watched scrip "
-                "comes within 0.3% of a key EMA (long at support / short at resistance).</div></div>")
+                "comes within 0.3% of a key EMA (and the setup clears the min R:R), risk-sized to your capital.</div></div>")
 
-    def _money(x):
+    def _money(x, big=False):
         c = "#00875a" if x > 0 else "#c62828" if x < 0 else "var(--muted)"
-        return f"<span style='color:{c};font-weight:700'>₹{x:+,.0f}</span>"
-
-    def _pts(x):
-        c = "#00875a" if x > 0 else "#c62828" if x < 0 else "var(--muted)"
-        return f"<span style='color:{c};font-weight:700'>{x:+,.2f}</span>"
+        sz = "font-size:20px;" if big else ""
+        return f"<span style='color:{c};font-weight:700;{sz}'>₹{x:+,.0f}</span>"
 
     wr = f"{st['win_rate']}%" if st["win_rate"] is not None else "–"
     pills = (f"<div class='trrow'>"
-             f"<div class='trpill'><div class='trv'>{st['open_n']}</div><div class='trl'>open</div></div>"
+             f"<div class='trpill'><div class='trv' style='font-size:20px'>{_money(st['total_inr'], True)}</div>"
+             f"<div class='trl'>net P&amp;L ({st['return_pct']:+.2f}% of capital)</div></div>"
+             f"<div class='trpill'><div class='trv'>{st['realized_R']:+.1f}R</div><div class='trl'>realised</div></div>"
              f"<div class='trpill'><div class='trv'>{wr}</div><div class='trl'>win rate ({st['wins']}/{st['closed_n']})</div></div>"
-             f"<div class='trpill'><div class='trv' style='font-size:20px'>{_money(st['realized_inr'])}</div><div class='trl'>realised</div></div>"
-             f"<div class='trpill'><div class='trv' style='font-size:20px'>{_money(st['unrealized_inr'])}</div><div class='trl'>open P&amp;L</div></div>"
+             f"<div class='trpill'><div class='trv'>{st['open_n']}</div><div class='trl'>open</div></div>"
              f"</div>")
 
     def _dir(r):
         return ("<span style='color:#00875a;font-weight:700'>LONG</span>" if r["direction"] == "long"
                 else "<span style='color:#c62828;font-weight:700'>SHORT</span>")
+
+    def _pnl(r):
+        return f"{_money(r['pnl_inr'])} <span class='muted'>({r['pnl_R']:+.1f}R)</span>"
     orows = "".join(
-        f"<tr><td>{_esc(r['future'])}</td><td>{_dir(r)}</td><td>{r['entry']:,.2f}</td>"
+        f"<tr><td>{_esc(r['future'])}</td><td>{_dir(r)}</td><td>{r.get('qty', 0):g}</td><td>{r['entry']:,.2f}</td>"
         f"<td style='color:#c62828'>{r['stop']:,.2f}</td><td style='color:#00875a'>{r['target']:,.2f}</td>"
-        f"<td>{r['current']:,.2f}</td><td>{_pts(r['pnl_points'])}{(' / ' + _money(r['pnl_inr'])) if r['lot'] > 1 else ''}</td></tr>"
+        f"<td>1:{r.get('rr', 0):.1f}</td><td>{r['current']:,.2f}</td><td>{_pnl(r)}</td></tr>"
         for r in bk["open"])
     open_tbl = (f"<div class='muted' style='margin-top:10px'>Open positions</div>"
-                f"<table class='ktbl'><thead><tr><th>future</th><th>side</th><th>entry</th><th>SL</th>"
-                f"<th>target</th><th>now</th><th>P&amp;L</th></tr></thead><tbody>{orows}</tbody></table>") if orows else ""
+                f"<table class='ktbl'><thead><tr><th>future</th><th>side</th><th>qty</th><th>entry</th><th>SL</th>"
+                f"<th>target</th><th>R:R</th><th>now</th><th>P&amp;L</th></tr></thead><tbody>{orows}</tbody></table>") if orows else ""
     crows = "".join(
         f"<tr><td>{_esc(r['future'])}</td><td>{_dir(r)}</td><td>{r['entry']:,.2f}→{r['exit']:,.2f}</td>"
-        f"<td>{'✅ target' if r['result'] == 'won' else '🛑 stop'}</td>"
-        f"<td>{_pts(r['pnl_points'])}{(' / ' + _money(r['pnl_inr'])) if r['lot'] > 1 else ''}</td></tr>"
+        f"<td>{'✅ target' if r['result'] == 'won' else '🛑 stop'}</td><td>{_pnl(r)}</td></tr>"
         for r in bk["closed"])
     closed_tbl = (f"<div class='muted' style='margin-top:10px'>Recently closed</div>"
                   f"<table class='ktbl'><thead><tr><th>future</th><th>side</th><th>entry→exit</th>"
