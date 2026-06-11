@@ -58,6 +58,7 @@ SCRIP_LOOKUP_URL = os.getenv("SCRIP_LOOKUP_URL", "http://172.18.0.1:8002/api/loo
 _DASH_BASE = SCRIP_LOOKUP_URL.rsplit("/api/", 1)[0]
 WATCH_URL = _DASH_BASE + "/api/watch"          # add/remove a scrip from the EMA-alert watchlist
 WATCHLIST_URL = _DASH_BASE + "/api/watchlist"  # list the watchlist
+TRADES_URL = _DASH_BASE + "/api/trades"        # the paper trade book
 
 
 @dataclass
@@ -148,7 +149,8 @@ async def _handle_start(bot_token: str, chat_id: int) -> None:
             "⏰ <b>EMA alerts</b> (Telegram trade alert when price nears a key EMA — with probability, entry, stop, target)\n"
             "<code>/watch &lt;name&gt;</code> — start alerting on a scrip\n"
             "<code>/unwatch &lt;name&gt;</code> — stop alerting on it\n"
-            "<code>/watchlist</code> — show what you're watching\n\n"
+            "<code>/watchlist</code> — show what you're watching\n"
+            "<code>/trades</code> — show open paper trades + P&amp;L\n\n"
             "🔑 <b>Upstox auth</b>\n"
             "<code>/token &lt;access_token&gt;</code> — store fresh Upstox token\n"
             "<code>/status</code> — show current token state\n\n"
@@ -403,6 +405,36 @@ async def _handle_watchlist(bot_token: str, chat_id: int) -> None:
         "<i>Plus the tracked indices, Tesla, BTC, Gold &amp; Crude — always monitored.</i>")
 
 
+async def _handle_trades(bot_token: str, chat_id: int) -> None:
+    """Show the paper trade book — open positions + summary."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(TRADES_URL)
+        bk = r.json()
+    except Exception as e:
+        await _send_message(bot_token, chat_id, f"❌ failed: <code>{html.escape(str(e))}</code>")
+        return
+    st = bk.get("stats") or {}
+    if not st:
+        await _send_message(bot_token, chat_id, "Paper book unavailable.")
+        return
+    head = (f"📒 <b>Paper trade book</b> — capital ₹{st['capital']:,.0f} · risk ₹{st['risk_per_trade']:,.0f}/trade\n"
+            f"Net P&amp;L <b>₹{st['total_inr']:+,.0f}</b> ({st['return_pct']:+.2f}%) · "
+            f"win-rate {st['win_rate'] if st['win_rate'] is not None else '–'}"
+            f"{'%' if st['win_rate'] is not None else ''} ({st['wins']}/{st['closed_n']}) · open {st['open_n']}")
+    op = bk.get("open") or []
+    if not op:
+        await _send_message(bot_token, chat_id, head + "\n\n<i>No open trades right now.</i>")
+        return
+    lines = [head, "\n<b>OPEN:</b>"]
+    for r in op:
+        arrow = "🟢 LONG" if r["direction"] == "long" else "🔴 SHORT"
+        lines.append(f"{arrow} <b>{html.escape(r['future'])}</b> @ {r['entry']:,.2f} (qty {r['qty']:g})\n"
+                     f"   SL {r['stop']:,.2f} · tgt {r['target']:,.2f} · R:R 1:{r['rr']:.1f} · "
+                     f"now {r['current']:,.2f} · ₹{r['pnl_inr']:+,.0f} ({r['pnl_R']:+.1f}R)")
+    await _send_message(bot_token, chat_id, "\n".join(lines))
+
+
 # ============================================================
 # Dispatcher
 # ============================================================
@@ -450,6 +482,8 @@ async def _dispatch(
         await _handle_watch(bot_token, update.chat_id, "unwatch", args)
     elif cmd in ("watchlist", "watches", "alerts"):
         await _handle_watchlist(bot_token, update.chat_id)
+    elif cmd in ("trades", "positions", "book", "pnl"):
+        await _handle_trades(bot_token, update.chat_id)
     else:
         await _send_message(
             bot_token,

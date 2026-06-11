@@ -795,6 +795,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/watchlist":
                 self._send(json.dumps({"tickers": _read_watch()}).encode(), "application/json")
                 return
+            if path == "/api/trades":
+                self._send(json.dumps(_pt.book() if _pt else {}).encode(), "application/json")
+                return
             if path == "/api/lookup":
                 from urllib.parse import urlparse, parse_qs
                 qs = parse_qs(urlparse(self.path).query)
