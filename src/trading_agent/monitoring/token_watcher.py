@@ -16,6 +16,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import os
 
 from sqlalchemy import select
 
@@ -121,10 +122,13 @@ async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
         ).scalar_one_or_none()
 
     instructions = _reauth_instructions()
-    today_key = now_ist().date().isoformat()  # dedup key: one alert per day per kind
+    today_key = now_ist().date().isoformat()
+    # Re-remind at most once every ~1.3h (configurable) until the operator re-auths,
+    # instead of the default 5-min repeat window (which was too spammy).
+    interval_sec = float(os.getenv("UPSTOX_TOKEN_ALERT_INTERVAL_HR", "1.3")) * 3600
 
     if row is None:
-        # No token at all — alert once and quit
+        # No token at all — remind every interval
         await alert(
             "token_expiry",
             (
@@ -132,11 +136,12 @@ async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
                 "The bot has never authenticated.\n\n" + instructions
             ),
             dedup_key=f"no_token_{today_key}",
+            dedup_window_sec=interval_sec,
         )
         return
 
     if not _is_valid(row.issued_at):
-        # Token expired — instruct via /token command
+        # Token expired — instruct via /token command (re-reminded every interval)
         await alert(
             "token_expiry",
             (
@@ -145,6 +150,7 @@ async def _check_once(settings: AppSettings, early_warning_min: int) -> None:
                 "Bot is paused on market data until you re-auth.\n\n" + instructions
             ),
             dedup_key=f"expired_{today_key}",
+            dedup_window_sec=interval_sec,
         )
         return
 

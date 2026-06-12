@@ -82,6 +82,7 @@ class TelegramAlerter:
         message: str,
         *,
         dedup_key: str = "",
+        dedup_window_sec: float | None = None,
         disable_notification: bool = False,
     ) -> bool:
         """
@@ -105,8 +106,9 @@ class TelegramAlerter:
         if dedup_key:
             cache_key = (kind, dedup_key)
             now = time.monotonic()
+            window = dedup_window_sec if dedup_window_sec is not None else _DEDUP_WINDOW_SEC
             last = _dedup_cache.get(cache_key)
-            if last is not None and (now - last) < _DEDUP_WINDOW_SEC:
+            if last is not None and (now - last) < window:
                 log.debug("telegram.deduped", kind=kind, dedup_key=dedup_key)
                 return False
             _dedup_cache[cache_key] = now
@@ -156,9 +158,12 @@ async def alert(
     message: str,
     *,
     dedup_key: str = "",
+    dedup_window_sec: float | None = None,
     silent: bool = False,
 ) -> bool:
-    """Fire-and-forget alert. Returns False on failure (never raises)."""
+    """Fire-and-forget alert. Returns False on failure (never raises).
+    dedup_window_sec overrides the default 5-min repeat-suppression window."""
     return await get_alerter().send(
-        kind, message, dedup_key=dedup_key, disable_notification=silent
+        kind, message, dedup_key=dedup_key,
+        dedup_window_sec=dedup_window_sec, disable_notification=silent,
     )

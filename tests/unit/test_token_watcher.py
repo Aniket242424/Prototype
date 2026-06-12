@@ -105,6 +105,7 @@ async def test_alert_fires_when_token_expired(_mock_session_context):
     assert "expired" in args[1].lower()
     assert "re-auth" in args[1].lower()
     assert kwargs["dedup_key"].startswith("expired_")
+    assert kwargs["dedup_window_sec"] == 1.3 * 3600    # re-remind every ~1.3h, not every 5 min
 
 
 async def test_no_alert_when_token_valid_and_not_expiring_soon(_mock_session_context):
